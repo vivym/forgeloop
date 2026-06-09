@@ -14,8 +14,10 @@ import {
   type CodexGenerationWorkloadV1,
   type CodexSession,
   type CodexSessionTurn,
+  type CodexRuntimeCapsule,
   type CodexRuntimeJob,
   type ContextManifest,
+  type PlanItemWorkflowQueuedAction,
 } from '@forgeloop/domain';
 import type { CreateOrReplayAutomationActionRunInput, DeliveryRepository } from '@forgeloop/db';
 
@@ -27,6 +29,8 @@ const generationRuntimeProfileEnv = 'FORGELOOP_CODEX_GENERATION_RUNTIME_PROFILE_
 const generationCredentialBindingEnv = 'FORGELOOP_CODEX_GENERATION_CREDENTIAL_BINDING_ID';
 const runtimeJobTtlMs = 10 * 60 * 1000;
 const claimTtlMs = runtimeJobTtlMs + 60 * 1000;
+
+type AutomationCodexGenerationTaskKind = Exclude<CodexGenerationTaskKind, 'review_response'>;
 
 const optionalEnv = (key: string): string | undefined => {
   const value = process.env[key]?.trim();
@@ -87,6 +91,11 @@ const generationCredentialIsUsable = async (
 
 export type ProductGenerationRuntimeScheduleResult = {
   action_run: AutomationActionRun;
+  runtime_job: PublicProductGenerationRuntimeJob;
+};
+
+export type PlanItemWorkflowReviewResponseRuntimeScheduleResult = {
+  action: PlanItemWorkflowQueuedAction;
   runtime_job: PublicProductGenerationRuntimeJob;
 };
 
@@ -258,6 +267,56 @@ export class ProductGenerationRuntimeSchedulerService {
     return { action_run: this.redactActionClaim(claimed), runtime_job: this.publicRuntimeJob(runtimeJob) };
   }
 
+  async schedulePlanItemWorkflowReviewResponse(input: {
+    repository?: DeliveryRepository;
+    action: PlanItemWorkflowQueuedAction;
+    review_packet_id: string;
+    review_packet_digest: string;
+    previous_run_session_id: string;
+    prompt_version: string;
+    context_manifest: ContextManifest;
+    signed_context_json: Record<string, unknown>;
+    project_id: string;
+    repo_ids: string[];
+    policy_digests?: Record<string, string> | undefined;
+  }): Promise<PlanItemWorkflowReviewResponseRuntimeScheduleResult> {
+    if (input.action.kind !== 'respond_to_review') {
+      throw new BadRequestException('Plan item workflow action is not a review response action');
+    }
+    if (input.action.codex_session_turn_id === undefined) {
+      throw new BadRequestException('Plan item workflow review response turn is required');
+    }
+    const repository = input.repository ?? this.defaultRepository;
+    const now = productGenerationRuntimeNowIso();
+    const repoIds = this.canonicalRepoIds(input.repo_ids);
+    const claimed = (
+      await repository.claimOrReplayPlanItemWorkflowQueuedActionRun({
+        workflow_id: input.action.workflow_id,
+        action_id: input.action.id,
+        now,
+      })
+    ).action;
+    const existingRuntimeJob = await this.runtimeJobForPlanItemWorkflowAction(repository, claimed, 'review_response');
+    if (existingRuntimeJob !== undefined && this.existingRuntimeJobCanBeReplayed(existingRuntimeJob, now)) {
+      return { action: claimed, runtime_job: this.publicRuntimeJob(existingRuntimeJob) };
+    }
+    const runtimeJob = await this.createPlanItemWorkflowActionRuntimeJob({
+      repository,
+      action: claimed,
+      reviewPacketId: input.review_packet_id,
+      reviewPacketDigest: input.review_packet_digest,
+      previousRunSessionId: input.previous_run_session_id,
+      promptVersion: input.prompt_version,
+      contextManifest: input.context_manifest,
+      signedContextJson: input.signed_context_json,
+      projectId: input.project_id,
+      repoIds,
+      policyDigests: input.policy_digests ?? {},
+      now,
+    });
+    return { action: claimed, runtime_job: this.publicRuntimeJob(runtimeJob) };
+  }
+
   private existingRuntimeJobCanBeReplayed(runtimeJob: CodexRuntimeJob, now: string): boolean {
     return runtimeJob.status === 'terminal' || runtimeJob.expires_at > now;
   }
@@ -348,7 +407,7 @@ export class ProductGenerationRuntimeSchedulerService {
     return [...new Set(repoIds)].sort();
   }
 
-  private runtimeJobIdForAction(actionRun: AutomationActionRun, taskKind: CodexGenerationTaskKind): string {
+  private runtimeJobIdForAction(actionRun: AutomationActionRun, taskKind: AutomationCodexGenerationTaskKind): string {
     return stableUuid({
       kind: 'product_generation_runtime_job',
       action_run_id: actionRun.id,
@@ -360,15 +419,380 @@ export class ProductGenerationRuntimeSchedulerService {
   runtimeJobForAction(
     repository: DeliveryRepository,
     actionRun: AutomationActionRun,
-    taskKind: CodexGenerationTaskKind,
+    taskKind: AutomationCodexGenerationTaskKind,
   ): Promise<CodexRuntimeJob | undefined> {
     return repository.getCodexRuntimeJob({ runtime_job_id: this.runtimeJobIdForAction(actionRun, taskKind) });
+  }
+
+  private runtimeJobIdForPlanItemWorkflowAction(
+    action: Pick<PlanItemWorkflowQueuedAction, 'id'>,
+    taskKind: Extract<CodexGenerationTaskKind, 'review_response'>,
+  ): string {
+    return stableUuid({
+      kind: 'plan_item_workflow_action_generation_runtime_job',
+      plan_item_workflow_action_id: action.id,
+      task_kind: taskKind,
+    });
+  }
+
+  runtimeJobForPlanItemWorkflowAction(
+    repository: DeliveryRepository,
+    action: Pick<PlanItemWorkflowQueuedAction, 'id'>,
+    taskKind: Extract<CodexGenerationTaskKind, 'review_response'>,
+  ): Promise<CodexRuntimeJob | undefined> {
+    return repository.getCodexRuntimeJob({ runtime_job_id: this.runtimeJobIdForPlanItemWorkflowAction(action, taskKind) });
+  }
+
+  private async requireReviewResponseContinuationInputs(
+    repository: DeliveryRepository,
+    input: {
+      workflowId: string;
+      session: CodexSession;
+      turn: CodexSessionTurn;
+    },
+  ): Promise<{
+    latestCapsule: CodexRuntimeCapsule;
+    latestMemoryBundleRef: string;
+    latestMemoryBundleDigest: string;
+    latestEnvironmentManifestRef: string;
+    latestEnvironmentManifestDigest: string;
+  }> {
+    const latestCapsuleId = input.session.latest_capsule_id;
+    const latestCapsuleDigest = input.session.latest_capsule_digest;
+    const latestMemoryBundleRef = input.session.latest_memory_bundle_ref;
+    const latestMemoryBundleDigest = input.session.latest_memory_bundle_digest;
+    const latestEnvironmentManifestRef = input.session.latest_environment_manifest_ref;
+    const latestEnvironmentManifestDigest = input.session.latest_environment_manifest_digest;
+    if (latestCapsuleId === undefined || latestCapsuleDigest === undefined) {
+      throw new DomainError(
+        'codex_runtime_capsule_missing',
+        `codex_runtime_capsule_missing: Codex session ${input.session.id} review response continuation inputs are unavailable`,
+      );
+    }
+    if (latestMemoryBundleRef === undefined || latestMemoryBundleDigest === undefined) {
+      throw new DomainError(
+        'codex_memory_bundle_missing',
+        `codex_memory_bundle_missing: Codex session ${input.session.id} review response continuation inputs are unavailable`,
+      );
+    }
+    if (latestEnvironmentManifestRef === undefined || latestEnvironmentManifestDigest === undefined) {
+      throw new DomainError(
+        'codex_environment_manifest_missing',
+        `codex_environment_manifest_missing: Codex session ${input.session.id} review response continuation inputs are unavailable`,
+      );
+    }
+    const latestCapsule = await repository.getCodexRuntimeCapsule(latestCapsuleId);
+    const producerTurn = latestCapsule === undefined ? undefined : await repository.getCodexSessionTurn(latestCapsule.created_from_turn_id);
+    if (
+      latestCapsule === undefined ||
+      latestCapsule.codex_session_id !== input.session.id ||
+      latestCapsule.digest !== latestCapsuleDigest ||
+      latestCapsule.codex_thread_id_digest !== input.session.codex_thread_id_digest ||
+      input.turn.expected_input_capsule_digest !== latestCapsuleDigest ||
+      producerTurn === undefined ||
+      producerTurn.workflow_id !== input.workflowId ||
+      producerTurn.codex_session_id !== input.session.id ||
+      producerTurn.status !== 'succeeded' ||
+      producerTurn.output_capsule_id !== latestCapsule.id ||
+      producerTurn.output_capsule_digest !== latestCapsule.digest ||
+      producerTurn.output_memory_bundle_ref !== latestMemoryBundleRef ||
+      producerTurn.output_memory_bundle_digest !== latestMemoryBundleDigest ||
+      producerTurn.output_environment_manifest_ref !== latestEnvironmentManifestRef ||
+      producerTurn.output_environment_manifest_digest !== latestEnvironmentManifestDigest
+    ) {
+      throw new DomainError(
+        'codex_runtime_capsule_stale',
+        `codex_runtime_capsule_stale: Codex session ${input.session.id} review response continuation lineage is stale`,
+      );
+    }
+    return {
+      latestCapsule,
+      latestMemoryBundleRef,
+      latestMemoryBundleDigest,
+      latestEnvironmentManifestRef,
+      latestEnvironmentManifestDigest,
+    };
+  }
+
+  private async createPlanItemWorkflowActionRuntimeJob(input: {
+    repository: DeliveryRepository;
+    action: PlanItemWorkflowQueuedAction;
+    reviewPacketId: string;
+    reviewPacketDigest: string;
+    previousRunSessionId: string;
+    promptVersion: string;
+    contextManifest: ContextManifest;
+    signedContextJson: Record<string, unknown>;
+    projectId: string;
+    repoIds: string[];
+    policyDigests: Record<string, string>;
+    now: string;
+  }): Promise<CodexRuntimeJob> {
+    const repoIds = this.canonicalRepoIds(input.repoIds);
+    const repoId = repoIds[0];
+    const configuredRuntimeProfileId = optionalEnv(generationRuntimeProfileEnv);
+    const configuredCredentialBindingId = optionalEnv(generationCredentialBindingEnv);
+    let profileRevision = await input.repository.getActiveCodexRuntimeProfileRevision({
+      project_id: input.projectId,
+      ...(repoId === undefined ? {} : { repo_id: repoId }),
+      target_kind: 'generation',
+      ...(configuredRuntimeProfileId === undefined ? {} : { runtime_profile_id: configuredRuntimeProfileId }),
+      now: input.now,
+    });
+    if (profileRevision === undefined) {
+      profileRevision = await input.repository.getActiveCodexRuntimeProfileRevision({
+        project_id: input.projectId,
+        ...(repoId === undefined ? {} : { repo_id: repoId }),
+        target_kind: 'generation',
+        now: input.now,
+      });
+    }
+    if (profileRevision === undefined) {
+      throw new BadRequestException(`Codex generation runtime profile is not available: ${generationRuntimeProfileEnv}`);
+    }
+    const configuredCredentialUsable =
+      configuredCredentialBindingId === undefined
+        ? false
+        : await generationCredentialIsUsable(input.repository, {
+            credential_binding_id: configuredCredentialBindingId,
+            profile_id: profileRevision.profile_id,
+            project_id: input.projectId,
+            ...(repoId === undefined ? {} : { repo_id: repoId }),
+            now: input.now,
+          });
+    const credentialBindingId =
+      configuredCredentialUsable && configuredCredentialBindingId !== undefined
+        ? configuredCredentialBindingId
+        : (
+            await input.repository.listCodexCredentialBindingReadinessCandidates({
+              project_id: input.projectId,
+              ...(repoId === undefined ? {} : { repo_id: repoId }),
+              runtime_profile_id: profileRevision.profile_id,
+              target_kind: 'generation',
+              now: input.now,
+            })
+          ).find((candidate) => candidate.purpose === 'model_provider')?.id;
+    if (credentialBindingId === undefined) {
+      throw new BadRequestException(`Codex generation credential binding is not configured: ${generationCredentialBindingEnv}`);
+    }
+    const credential = await input.repository.getCodexCredentialBindingPublic(credentialBindingId);
+    if (
+      credential === undefined ||
+      credential.profile_id !== profileRevision.profile_id ||
+      credential.project_id !== input.projectId ||
+      credential.purpose !== 'model_provider' ||
+      credential.active_version_id === undefined ||
+      credential.active_payload_digest === undefined ||
+      (credential.repo_id !== undefined && credential.repo_id !== repoId)
+    ) {
+      throw new BadRequestException('Codex generation credential binding fence was rejected');
+    }
+    const turnId = input.action.codex_session_turn_id;
+    if (turnId === undefined) {
+      throw new BadRequestException('Plan item workflow review response turn is required');
+    }
+    const [session, turn] = await Promise.all([
+      input.repository.getCodexSession(input.action.codex_session_id),
+      input.repository.getCodexSessionTurn(turnId),
+    ]);
+    if (
+      session === undefined ||
+      turn === undefined ||
+      turn.workflow_id !== input.action.workflow_id ||
+      turn.codex_session_id !== input.action.codex_session_id ||
+      session.id !== input.action.codex_session_id ||
+      session.codex_thread_id === undefined ||
+      session.codex_thread_id_digest === undefined
+    ) {
+      throw new DomainError(
+        'workflow_legacy_entrypoint_disabled',
+        'workflow_legacy_entrypoint_disabled: Review response runtime requires a bound Codex session turn',
+      );
+    }
+    const continuationInputs = await this.requireReviewResponseContinuationInputs(input.repository, {
+      workflowId: input.action.workflow_id,
+      session,
+      turn,
+    });
+
+    const providerConfigDigest = networkProviderConfigDigest(profileRevision.network_policy);
+    const workerTarget = {
+      project_id: input.projectId,
+      ...(repoId === undefined ? {} : { repo_id: repoId }),
+      target_kind: 'generation' as const,
+      docker_image_digest: profileRevision.docker_image_digest,
+      network_policy_digest: codexRuntimeNetworkPolicyDigest(profileRevision.network_policy),
+      ...(providerConfigDigest === undefined ? {} : { network_provider_config_digest: providerConfigDigest }),
+      now: input.now,
+    };
+    const liveRunnerOwner =
+      session.runner_worker_id !== undefined &&
+      session.runner_runtime_job_id !== undefined &&
+      session.runner_launch_lease_id !== undefined &&
+      session.runner_expires_at !== undefined &&
+      session.runner_expires_at > input.now
+        ? {
+            required_worker_id: session.runner_worker_id,
+            runner_runtime_job_id: session.runner_runtime_job_id,
+            runner_launch_lease_id: session.runner_launch_lease_id,
+          }
+        : undefined;
+    const worker =
+      liveRunnerOwner?.required_worker_id === undefined
+        ? await input.repository.findAvailableCodexWorker(workerTarget)
+        : await input.repository.findCodexWorkerForSessionRunner({
+            ...workerTarget,
+            worker_id: liveRunnerOwner.required_worker_id,
+          });
+    if (worker === undefined) {
+      throw new DomainError(
+        'codex_session_runner_unavailable',
+        `codex_session_runner_unavailable: Codex session ${session.id} runner worker is unavailable`,
+      );
+    }
+    const workerSessionDigest = await input.repository.getCodexWorkerSessionDigest(worker.id);
+    if (workerSessionDigest === undefined) {
+      throw new DomainError(
+        'codex_session_runner_unavailable',
+        `codex_session_runner_unavailable: Codex worker ${worker.id} session digest is unavailable`,
+      );
+    }
+    const runtimeJobId = this.runtimeJobIdForPlanItemWorkflowAction(input.action, 'review_response');
+    const leaseToken = sessionLeaseToken({
+      plan_item_workflow_action_id: input.action.id,
+      runtime_job_id: runtimeJobId,
+      codex_session_id: session.id,
+      codex_session_turn_id: turn.id,
+    });
+    const claimed = await input.repository.claimCodexSessionLease({
+      session_id: session.id,
+      workflow_id: input.action.workflow_id,
+      lease_id: stableUuid({ kind: 'plan_item_workflow_action_codex_session_lease', runtime_job_id: runtimeJobId }),
+      lease_token_hash: codexCredentialPayloadDigest(leaseToken),
+      worker_id: worker.id,
+      worker_session_digest: workerSessionDigest,
+      expected_input_capsule_digest: continuationInputs.latestCapsule.digest,
+      now: input.now,
+      expires_at: isoAfter(input.now, runtimeJobTtlMs),
+    });
+    const jobExpiresAt = isoAfter(input.now, runtimeJobTtlMs);
+    const signedContextRef = `artifact://codex-runtime-jobs/${runtimeJobId}/workload/signed-context`;
+    const signedContextJson = {
+      ...input.signedContextJson,
+      previous_run_session_id: input.previousRunSessionId,
+    };
+    const signedContextDigest = codexCanonicalDigest(signedContextJson);
+    const workload: CodexGenerationWorkloadV1 = {
+      schema_version: 'codex_generation_workload.v1',
+      runtime_job_id: runtimeJobId,
+      plan_item_workflow_action_id: input.action.id,
+      plan_item_workflow_id: input.action.workflow_id,
+      codex_session_id: session.id,
+      codex_session_turn_id: turn.id,
+      review_packet_id: input.reviewPacketId,
+      review_packet_digest: input.reviewPacketDigest,
+      task_kind: 'review_response',
+      prompt_version: input.promptVersion,
+      output_schema_version: 'review_response.v1',
+      signed_context_ref: signedContextRef,
+      signed_context_digest: signedContextDigest,
+      prompt_template_digest: codexCanonicalDigest({
+        task_kind: 'review_response',
+        prompt_version: input.promptVersion,
+        output_schema_version: 'review_response.v1',
+      }),
+      created_at: input.now,
+      expires_at: jobExpiresAt,
+      codex_session_runtime_context: {
+        schema_version: 'codex_session_runtime_context.v1',
+        codex_session_id: session.id,
+        codex_session_turn_id: turn.id,
+        lease_id: claimed.lease.id,
+        lease_epoch: claimed.lease.lease_epoch,
+        worker_id: worker.id,
+        worker_session_digest: claimed.lease.worker_session_digest,
+        expected_input_capsule_digest: continuationInputs.latestCapsule.digest,
+        ...(liveRunnerOwner?.runner_runtime_job_id === undefined
+          ? {}
+          : { runner_runtime_job_id: liveRunnerOwner.runner_runtime_job_id }),
+        ...(liveRunnerOwner?.runner_launch_lease_id === undefined
+          ? {}
+          : { runner_launch_lease_id: liveRunnerOwner.runner_launch_lease_id }),
+        turn_group_status: 'complete',
+        continuation: {
+          kind: 'resume_thread',
+          codex_thread_id: session.codex_thread_id,
+          codex_thread_id_digest: session.codex_thread_id_digest,
+        },
+      },
+      codex_session_terminalization: {
+        schema_version: 'codex_session_terminalization.v1',
+        lease_token: leaseToken,
+        codex_session_id: session.id,
+        codex_session_turn_id: turn.id,
+        expected_input_capsule_digest: continuationInputs.latestCapsule.digest,
+        input_capsule_id: continuationInputs.latestCapsule.id,
+        input_capsule_digest: continuationInputs.latestCapsule.digest,
+        input_capsule_ref: continuationInputs.latestCapsule.artifact_ref,
+        ...(turn.base_memory_bundle_ref === undefined ? {} : { base_memory_bundle_ref: turn.base_memory_bundle_ref }),
+        ...(turn.base_memory_bundle_digest === undefined ? {} : { base_memory_bundle_digest: turn.base_memory_bundle_digest }),
+        input_memory_bundle_ref: continuationInputs.latestMemoryBundleRef,
+        input_memory_bundle_digest: continuationInputs.latestMemoryBundleDigest,
+        input_environment_manifest_ref: continuationInputs.latestEnvironmentManifestRef,
+        input_environment_manifest_digest: continuationInputs.latestEnvironmentManifestDigest,
+      },
+    };
+    const workspaceAcquisition = {
+      schema_version: 'codex_generation_workspace_acquisition.v1',
+      signed_context_ref: signedContextRef,
+      signed_context_digest: signedContextDigest,
+      signed_context_json: signedContextJson,
+      repo_ids: repoIds,
+      policy_digests: input.policyDigests,
+    };
+    const workspaceAcquisitionDigest = codexWorkspaceAcquisitionDigest(workspaceAcquisition);
+    if (workspaceAcquisitionDigest === undefined) {
+      throw new BadRequestException('Codex generation workspace acquisition digest is unavailable');
+    }
+    const result = await input.repository.createOrReplayCodexRuntimeJobWithLeaseAndEnvelope({
+      runtime_job_id: runtimeJobId,
+      launch_lease_id: stableUuid({ kind: 'plan_item_workflow_action_generation_launch_lease', runtime_job_id: runtimeJobId }),
+      envelope_id: stableUuid({ kind: 'plan_item_workflow_action_generation_launch_envelope', runtime_job_id: runtimeJobId }),
+      job_request_id: `plan-item-workflow-action:${input.action.id}:review_response`,
+      target: {
+        target_type: 'plan_item_workflow_action',
+        target_id: input.action.id,
+        target_kind: 'generation',
+        project_id: input.projectId,
+        ...(repoId === undefined ? {} : { repo_id: repoId }),
+      },
+      launch_attempt: 1,
+      worker_id: worker.id,
+      runtime_profile_revision_id: profileRevision.id,
+      runtime_profile_digest: profileRevision.profile_digest,
+      credential_binding_id: credential.id,
+      credential_binding_version_id: credential.active_version_id,
+      credential_payload_digest: credential.active_payload_digest,
+      docker_image_digest: profileRevision.docker_image_digest,
+      network_policy_digest: codexRuntimeNetworkPolicyDigest(profileRevision.network_policy),
+      ...(providerConfigDigest === undefined ? {} : { network_provider_config_digest: providerConfigDigest }),
+      input_json: { ...workload },
+      input_digest: codexRuntimeJobInputDigest(workload),
+      workspace_acquisition_json: workspaceAcquisition,
+      workspace_acquisition_digest: workspaceAcquisitionDigest,
+      workflow_id: input.action.workflow_id,
+      codex_session_id: session.id,
+      codex_session_turn_id: turn.id,
+      expires_at: jobExpiresAt,
+      now: input.now,
+    });
+    return result.runtime_job;
   }
 
   private async createRuntimeJob(input: {
     repository: DeliveryRepository;
     actionRun: AutomationActionRun;
-    taskKind: CodexGenerationTaskKind;
+    taskKind: AutomationCodexGenerationTaskKind;
     promptVersion: string;
     outputSchemaVersion: string;
     contextManifest: ContextManifest;
@@ -511,9 +935,6 @@ export class ProductGenerationRuntimeSchedulerService {
       schema_version: 'codex_generation_workload.v1',
       runtime_job_id: runtimeJobId,
       action_run_id: input.actionRun.id,
-      ...(input.context?.plan_item_workflow_action_id === undefined
-        ? {}
-        : { plan_item_workflow_action_id: input.context.plan_item_workflow_action_id }),
       task_kind: input.taskKind,
       prompt_version: input.promptVersion,
       output_schema_version: input.outputSchemaVersion,

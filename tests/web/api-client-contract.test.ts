@@ -206,4 +206,110 @@ describe('AI-native web API client contract', () => {
       }),
     );
   });
+
+  it('sends Wave 7 Plan Item Workflow commands with product-safe bodies only', async () => {
+    const responses = [
+      { status: 'execution_running' },
+      { status: 'code_review' },
+      { status: 'execution_running' },
+      { status: 'code_review' },
+    ];
+    const fetchMock = vi.fn(async () =>
+      new Response(JSON.stringify({ id: 'workflow-1', ...responses.shift() }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      }),
+    );
+    const commands = createForgeloopCommandApi({ baseUrl: 'http://api.local', fetch: fetchMock });
+    const digest = `sha256:${'a'.repeat(64)}`;
+
+    await commands.continuePlanItemWorkflowExecution('workflow-1', {
+      actor_id: 'actor-dev',
+      idempotency_key: 'continue-key',
+      input_markdown: 'Continue the interrupted execution.',
+    });
+    await commands.respondToPlanItemWorkflowReview('workflow-1', {
+      actor_id: 'actor-reviewer',
+      expected_review_packet_id: 'review-packet-1',
+      expected_review_packet_digest: digest,
+      response_prompt_markdown: 'Explain why this change is safe.',
+    });
+    await commands.requestPlanItemWorkflowReviewFix('workflow-1', {
+      actor_id: 'actor-reviewer',
+      expected_review_packet_id: 'review-packet-1',
+      expected_review_packet_digest: digest,
+      fix_instruction_markdown: 'Apply the requested changes.',
+    });
+    await commands.abandonPlanItemWorkflowSession('workflow-1', {
+      actor_id: 'actor-tech',
+      next_action: 'request_fix',
+      confirmation_phrase: 'abandon current session and start new session',
+      reason: 'The current writer can no longer terminalize safely.',
+    });
+
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      1,
+      'http://api.local/plan-item-workflows/workflow-1/execution/continue',
+      expect.objectContaining({
+        method: 'POST',
+        headers: expect.objectContaining({ 'X-Forgeloop-Actor-Id': 'actor-dev' }),
+      }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      'http://api.local/plan-item-workflows/workflow-1/code-review/respond',
+      expect.objectContaining({
+        method: 'POST',
+        headers: expect.objectContaining({ 'X-Forgeloop-Actor-Id': 'actor-reviewer' }),
+      }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      3,
+      'http://api.local/plan-item-workflows/workflow-1/code-review/request-fix',
+      expect.objectContaining({
+        method: 'POST',
+        headers: expect.objectContaining({ 'X-Forgeloop-Actor-Id': 'actor-reviewer' }),
+      }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      4,
+      'http://api.local/plan-item-workflows/workflow-1/recovery/abandon-and-new-session',
+      expect.objectContaining({
+        method: 'POST',
+        headers: expect.objectContaining({ 'X-Forgeloop-Actor-Id': 'actor-tech' }),
+      }),
+    );
+
+    const bodies = fetchMock.mock.calls.map(([, init]) => JSON.parse(String((init as RequestInit).body)));
+    expect(bodies).toEqual([
+      {
+        actor_id: 'actor-dev',
+        idempotency_key: 'continue-key',
+        input_markdown: 'Continue the interrupted execution.',
+      },
+      {
+        actor_id: 'actor-reviewer',
+        expected_review_packet_id: 'review-packet-1',
+        expected_review_packet_digest: digest,
+        response_prompt_markdown: 'Explain why this change is safe.',
+      },
+      {
+        actor_id: 'actor-reviewer',
+        expected_review_packet_id: 'review-packet-1',
+        expected_review_packet_digest: digest,
+        fix_instruction_markdown: 'Apply the requested changes.',
+      },
+      {
+        actor_id: 'actor-tech',
+        next_action: 'request_fix',
+        confirmation_phrase: 'abandon current session and start new session',
+        reason: 'The current writer can no longer terminalize safely.',
+      },
+    ]);
+    for (const body of bodies) {
+      expect(JSON.stringify(body)).not.toMatch(
+        /codex_thread_id|codex_session_id|capsule_ref|memory_bundle_ref|environment_manifest_ref|lease_token|worker_id|credential|\/Users\//i,
+      );
+    }
+  });
 });

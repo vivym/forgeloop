@@ -40,18 +40,69 @@ export type WorkflowExecutionRunSummaryModel = {
   updatedAt?: string;
 };
 
+export type WorkflowAttemptTimelineRow = {
+  id: string;
+  runSessionId: string;
+  attemptKind: string;
+  status: string;
+  continuationCount: number;
+  previousRunSessionId?: string;
+  previousReviewPacketId?: string;
+  updatedAt: string;
+};
+
+export type WorkflowExecutionLensModel = {
+  attemptRows: WorkflowAttemptTimelineRow[];
+  canContinue: boolean;
+  continueDisabledReason?: string;
+  currentAttempt?: WorkflowAttemptTimelineRow;
+  sameSessionDigest: string;
+  warningCopy?: string;
+};
+
+export type WorkflowCodeReviewLensModel = {
+  canRequestFix: boolean;
+  canRespond: boolean;
+  currentPacket?: {
+    id: string;
+    digest: string;
+    status: string;
+    decision: string;
+    summary?: string;
+    evidenceRefs: Array<{ id: string; label: string; digest: string; visibility: string; url?: string }>;
+  };
+  latestResponse?: {
+    id: string;
+    status: string;
+    summary?: string;
+    responseMarkdown?: string;
+    createdAt: string;
+  };
+  requestFixDisabledReason?: string;
+  respondDisabledReason?: string;
+};
+
+export type WorkflowRecoveryPanelModel = {
+  abandonOption?: PlanItemWorkflowPublicDto['recovery_options'][number];
+  forkOption: PlanItemWorkflowPublicDto['recovery_options'][number];
+  options: PlanItemWorkflowPublicDto['recovery_options'];
+};
+
 export type PlanItemWorkflowWorkspaceModel = {
   artifacts: WorkflowArtifactModel[];
   blockers: string[];
   canEvaluateReadiness: boolean;
   canStartExecution: boolean;
+  codeReviewLens: WorkflowCodeReviewLensModel;
   composerDisabledReason?: string;
   contextPreview: Array<{ label: string; value: string }>;
   conversationEvents: WorkflowConversationEventModel[];
   defaultArtifact?: WorkflowArtifactModel;
+  executionLens: WorkflowExecutionLensModel;
   executionRunSummary?: WorkflowExecutionRunSummaryModel;
   readinessDisabledReason?: string;
   readinessState: string;
+  recoveryPanel: WorkflowRecoveryPanelModel;
   roleLens: Array<{ id: WorkflowRoleLens; label: string; selected: boolean }>;
   stages: WorkflowStageModel[];
   workflow: PlanItemWorkflowPublicDto;
@@ -86,13 +137,16 @@ export function toPlanItemWorkflowWorkspaceModel(input: {
     blockers: workflow.blockers.map((blocker) => blocker.code),
     canEvaluateReadiness: workflow.readiness?.can_evaluate ?? false,
     canStartExecution: workflow.status === 'execution_ready',
+    codeReviewLens: codeReviewLensModel(input.item, workflow),
     ...(composerDisabledReason === undefined ? {} : { composerDisabledReason }),
     contextPreview: contextPreviewModel(input.item, workflow),
     conversationEvents: conversationEvents(workflow),
     ...(defaultArtifact === undefined ? {} : { defaultArtifact }),
+    executionLens: executionLensModel(workflow, executionRunSummary),
     ...(executionRunSummary === undefined ? {} : { executionRunSummary }),
     ...optionalReadinessDisabledReason(workflow),
     readinessState: workflow.readiness?.state ?? 'not_evaluated',
+    recoveryPanel: recoveryPanelModel(workflow),
     roleLens: roleLensModel(input.roleLens),
     stages: timelineStages(input.item, workflow, input.roleLens),
     workflow: workflowForUi,
@@ -257,6 +311,127 @@ export function executionRunSummaryModel(
   };
 }
 
+export function executionLensModel(
+  workflow: PlanItemWorkflowPublicDto,
+  executionRunSummary: WorkflowExecutionRunSummaryModel | undefined,
+): WorkflowExecutionLensModel {
+  const attemptRows = (workflow.attempt_history ?? []).map((attempt) => ({
+    id: attempt.run_session_id,
+    runSessionId: attempt.run_session_id,
+    attemptKind: humanize(attempt.attempt_kind),
+    status: attempt.status,
+    continuationCount: attempt.continuation_events.length,
+    ...(attempt.previous_run_session_id === undefined ? {} : { previousRunSessionId: attempt.previous_run_session_id }),
+    ...(attempt.previous_review_packet_id === undefined ? {} : { previousReviewPacketId: attempt.previous_review_packet_id }),
+    updatedAt: attempt.updated_at,
+  }));
+  const currentAttempt = attemptRows.find((attempt) => attempt.runSessionId === executionRunSummary?.runSessionId) ?? attemptRows.at(-1);
+  const continueOption = (workflow.recovery_options ?? []).find((option) => option.action_id === 'continue_same_session');
+  const continueDisabledReason =
+    continueOption?.enabled === true
+      ? undefined
+      : continueOption?.blocker_code ?? 'Same-session continuation is not available for the current workflow state.';
+
+  return {
+    attemptRows,
+    canContinue: continueOption?.enabled === true,
+    ...(continueDisabledReason === undefined ? {} : { continueDisabledReason }),
+    ...(currentAttempt === undefined ? {} : { currentAttempt }),
+    sameSessionDigest:
+      executionRunSummary?.digestRows.find((row) => row.label === 'Thread digest')?.value ??
+      workflow.context_preview?.digest ??
+      'Continuity digest unavailable',
+    ...(continueOption?.warning_copy === undefined ? {} : { warningCopy: continueOption.warning_copy }),
+  };
+}
+
+export function codeReviewLensModel(
+  item: DevelopmentPlanItemProjection,
+  workflow: PlanItemWorkflowPublicDto,
+): WorkflowCodeReviewLensModel {
+  const currentPacket = workflow.current_review_packet;
+  const runningAction = hasRunningAction(workflow);
+  const stageReady = workflow.status === 'code_review';
+  const handoffSummary = item.code_review_handoffs?.[0]?.summary;
+  const reviewPacketUnavailable = 'Current Review Packet is not available yet.';
+  const stageUnavailable = 'Code Review actions are available only during Code Review.';
+  const busyUnavailable = 'A workflow action is already queued or running.';
+  const currentPacketSummary = currentPacket?.summary ?? handoffSummary;
+  const currentPacketModel = currentPacket === undefined
+    ? undefined
+    : {
+        id: currentPacket.id,
+        digest: currentPacket.digest,
+        status: currentPacket.status,
+        decision: currentPacket.decision,
+        ...(currentPacketSummary === undefined ? {} : { summary: currentPacketSummary }),
+        evidenceRefs: (currentPacket.evidence_refs ?? []).map((ref) => ({
+          id: ref.id,
+          label: ref.display_text,
+          digest: ref.digest,
+          visibility: ref.visibility,
+          ...(ref.url === undefined ? {} : { url: ref.url }),
+        })),
+      };
+  const latestResponse = workflow.latest_review_response === undefined
+    ? undefined
+    : {
+        id: workflow.latest_review_response.id,
+        status: workflow.latest_review_response.status,
+        ...(workflow.latest_review_response.summary === undefined ? {} : { summary: workflow.latest_review_response.summary }),
+        ...(workflow.latest_review_response.response_markdown === undefined
+          ? {}
+          : { responseMarkdown: workflow.latest_review_response.response_markdown }),
+        createdAt: workflow.latest_review_response.created_at,
+      };
+  const respondDisabledReason = stageReady
+    ? runningAction
+      ? busyUnavailable
+      : currentPacketModel === undefined
+        ? reviewPacketUnavailable
+        : undefined
+    : stageUnavailable;
+  const requestFixDisabledReason = stageReady
+    ? runningAction
+      ? busyUnavailable
+      : currentPacketModel === undefined
+        ? reviewPacketUnavailable
+        : currentPacketModel.decision !== 'changes_requested'
+          ? 'Request fix is available only for Review Packets with requested changes.'
+          : undefined
+    : stageUnavailable;
+
+  return {
+    canRequestFix: requestFixDisabledReason === undefined,
+    canRespond: respondDisabledReason === undefined,
+    ...(currentPacketModel === undefined ? {} : { currentPacket: currentPacketModel }),
+    ...(latestResponse === undefined ? {} : { latestResponse }),
+    ...(requestFixDisabledReason === undefined ? {} : { requestFixDisabledReason }),
+    ...(respondDisabledReason === undefined ? {} : { respondDisabledReason }),
+  };
+}
+
+export function recoveryPanelModel(workflow: PlanItemWorkflowPublicDto): WorkflowRecoveryPanelModel {
+  const recoveryOptions = workflow.recovery_options ?? [];
+  const forkOption = recoveryOptions.find((option) => option.action_id === 'fork_unavailable') ?? {
+    action_id: 'fork_unavailable' as const,
+    enabled: false,
+    blocker_code: 'workflow_fork_deferred_until_wave_8',
+    warning_copy: 'Forking a workflow session is unavailable before Wave 8.',
+    required_confirmation_kind: 'none' as const,
+  };
+  const options = recoveryOptions.some((option) => option.action_id === 'fork_unavailable')
+    ? recoveryOptions
+    : [...recoveryOptions, forkOption];
+  const abandonOption = options.find((option) => option.action_id === 'abandon_new_session');
+
+  return {
+    ...(abandonOption === undefined ? {} : { abandonOption }),
+    forkOption,
+    options,
+  };
+}
+
 export function roleLensModel(selected: WorkflowRoleLens) {
   return [
     { id: 'product' as const, label: 'Product', selected: selected === 'product' },
@@ -285,6 +460,7 @@ export function assertNoRawRuntimeFieldsForUi(model: PlanItemWorkflowWorkspaceMo
     'memory_bundle_ref',
     'memory_refs',
     'input_environment_manifest_ref',
+    'internal_object_ref',
     'output_environment_manifest_ref',
     'latest_environment_manifest_ref',
     'prompt_transcript',
@@ -360,6 +536,12 @@ export function queuedActionLabel(kind: PlanItemWorkflowPublicDto['queued_action
       return 'Implementation Plan Doc generation';
     case 'revise_implementation_plan_doc':
       return 'Implementation Plan Doc revision';
+    case 'continue_execution':
+      return 'Execution continuation';
+    case 'respond_to_review':
+      return 'Review response';
+    case 'request_fix':
+      return 'Review fix request';
   }
 }
 

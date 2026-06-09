@@ -375,6 +375,10 @@ const cloneRequiredCheckSpec = (check: RequiredCheckSpec): RequiredCheckSpec => 
 
 const cloneRequestedChange = (change: RequestedChange): RequestedChange => ({ ...change });
 
+const cloneReviewPacketEvidenceRef = <T extends { id: string; ref_kind: string; display_text: string; digest: string }>(
+  ref: T,
+): T => ({ ...ref });
+
 const cloneSelfReviewResult = (selfReview: SelfReviewResult): SelfReviewResult => ({
   ...selfReview,
   risk_notes: [...selfReview.risk_notes],
@@ -390,6 +394,11 @@ const cloneRunSpec = (runSpec: RunSpec): RunSpec => ({
   },
   review_context: {
     ...runSpec.review_context,
+    ...(runSpec.review_context.required_checks === undefined
+      ? {}
+      : { required_checks: runSpec.review_context.required_checks.map(cloneRequiredCheckSpec) }),
+    evidence_refs: (runSpec.review_context.evidence_refs ?? []).map(cloneReviewPacketEvidenceRef),
+    review_response_ids: [...(runSpec.review_context.review_response_ids ?? [])],
     requested_changes: (runSpec.review_context.requested_changes ?? []).map(cloneRequestedChange),
   },
   source_mutation_policy: runSpec.source_mutation_policy ?? 'path_policy_scoped',
@@ -1357,7 +1366,12 @@ export const transitionRunSession = (runSession: RunSession | undefined, event: 
       }
       break;
     case 'resume_requested':
-      if (runSession.status === 'waiting_for_input' || runSession.status === 'stalled' || runSession.status === 'resuming') {
+      if (
+        runSession.status === 'waiting_for_input' ||
+        runSession.status === 'stalled' ||
+        runSession.status === 'resuming' ||
+        runSession.status === 'cancel_requested'
+      ) {
         return { ...runSession, status: 'resuming', updated_at: at };
       }
       break;

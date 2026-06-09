@@ -1,11 +1,15 @@
 import { describe, expect, it } from 'vitest';
 import {
+  abandonWorkflowSessionBodySchema,
   codexSessionPublicDtoSchema,
+  continueWorkflowExecutionBodySchema,
   internalPlanItemWorkflowTransitionSchema,
   internalWorkflowManualDecisionSchema,
   planItemWorkflowPublicDtoSchema,
   planItemWorkflowQueuedActionSchema,
   planItemWorkflowTransitionSchema,
+  requestWorkflowReviewFixBodySchema,
+  respondToWorkflowReviewBodySchema,
   workflowMessageCommandSchema,
   workflowManualDecisionSchema,
 } from '@forgeloop/contracts';
@@ -83,6 +87,35 @@ describe('plan item workflow contracts', () => {
         created_at: '2026-05-31T00:00:00.000Z',
       }),
     ).toThrow();
+  });
+
+  it('accepts Wave 7 queued action kinds and abandon decision kind', () => {
+    for (const kind of ['continue_execution', 'respond_to_review', 'request_fix']) {
+      expect(() =>
+        planItemWorkflowQueuedActionSchema.parse({
+          id: `action-${kind}`,
+          workflow_id: 'workflow-1',
+          kind,
+          status: 'queued',
+          context_preview_digest: `sha256:${'1'.repeat(64)}`,
+          idempotency_key: `sha256:${'2'.repeat(64)}`,
+          created_by_actor_id: 'actor-tech',
+          created_at: '2026-06-07T00:00:00.000Z',
+          updated_at: '2026-06-07T00:00:00.000Z',
+        }),
+      ).not.toThrow();
+    }
+
+    expect(() =>
+      workflowManualDecisionSchema.parse({
+        id: 'decision-abandon',
+        workflow_id: 'workflow-1',
+        kind: 'abandon_new_session',
+        reason: 'The session cannot be resumed safely.',
+        created_by_actor_id: 'actor-tech',
+        created_at: '2026-06-07T00:00:00.000Z',
+      }),
+    ).not.toThrow();
   });
 
   it('rejects fork_select from the public manual decision schema', () => {
@@ -253,6 +286,154 @@ describe('plan item workflow contracts', () => {
         latest_capsule_ref: 'artifact://internal/codex_runtime_capsule/codex_session/session-1/capsule-1',
       }).success,
     ).toBe(false);
+  });
+
+  it('accepts Wave 7 public projection fields and rejects raw runtime refs', () => {
+    const workflow = planItemWorkflowPublicDtoSchema.parse({
+      id: 'workflow-1',
+      development_plan_id: 'plan-1',
+      development_plan_item_id: 'item-1',
+      status: 'code_review',
+      session: {
+        status: 'idle',
+        role: 'active',
+        continuity_state: 'ready',
+        can_continue: true,
+      },
+      attempt_history: [
+        {
+          run_session_id: 'run-1',
+          attempt_kind: 'first_execution',
+          status: 'succeeded',
+          continuation_events: [
+            {
+              queued_action_id: 'action-continue-1',
+              continuation_kind: 'relaunch_after_fencing',
+              created_at: '2026-06-07T00:01:00.000Z',
+            },
+          ],
+          created_at: '2026-06-07T00:00:00.000Z',
+          updated_at: '2026-06-07T00:02:00.000Z',
+        },
+      ],
+      latest_review_response: {
+        id: 'review-response-1',
+        review_packet_id: 'review-packet-1',
+        previous_run_session_id: 'run-1',
+        status: 'succeeded',
+        summary: 'Review response summary.',
+        response_markdown: 'The implementation needs one follow-up fix.',
+        created_at: '2026-06-07T00:03:00.000Z',
+      },
+      recovery_options: [
+        {
+          action_id: 'continue_same_session',
+          enabled: false,
+          blocker_code: 'workflow_execution_writer_still_active',
+          warning_copy: 'The current writer can still terminalize.',
+          required_confirmation_kind: 'none',
+        },
+      ],
+      created_at: '2026-06-07T00:00:00.000Z',
+      updated_at: '2026-06-07T00:03:00.000Z',
+    });
+
+    expect(workflow.attempt_history).toHaveLength(1);
+    expect(workflow.latest_review_response?.review_packet_id).toBe('review-packet-1');
+    expect(workflow.latest_review_response?.summary).toBe('Review response summary.');
+    expect(workflow.latest_review_response?.response_markdown).toBe('The implementation needs one follow-up fix.');
+    for (const field of [
+      'codex_thread_id',
+      'latest_capsule_ref',
+      'latest_memory_bundle_ref',
+      'local_path',
+      'worker_id',
+      'lease_token',
+    ]) {
+      expect(() =>
+        planItemWorkflowPublicDtoSchema.parse({
+          ...workflow,
+          attempt_history: [{ ...workflow.attempt_history[0], [field]: `${field}-value` }],
+        }),
+      ).toThrow();
+    }
+  });
+
+  it('validates Wave 7 command bodies without raw runtime refs', () => {
+    expect(
+      continueWorkflowExecutionBodySchema.parse({
+        actor_id: 'actor-tech',
+        idempotency_key: 'continue-1',
+        input_markdown: 'Continue from the latest safe capsule.',
+        cancel_recovery_decision: 'recover_instead_of_accept_cancel',
+        cancel_recovery_confirmation_phrase: 'recover cancelled execution',
+      }).cancel_recovery_decision,
+    ).toBe('recover_instead_of_accept_cancel');
+    expect(() =>
+      continueWorkflowExecutionBodySchema.parse({
+        actor_id: 'actor-tech',
+        idempotency_key: 'continue-1',
+        codex_thread_id: 'thread-raw',
+      }),
+    ).toThrow();
+
+    expect(
+      respondToWorkflowReviewBodySchema.parse({
+        actor_id: 'actor-tech',
+        expected_review_packet_id: 'review-packet-1',
+        expected_review_packet_digest: `sha256:${'a'.repeat(64)}`,
+      }).expected_review_packet_id,
+    ).toBe('review-packet-1');
+    expect(() =>
+      respondToWorkflowReviewBodySchema.parse({
+        actor_id: 'actor-tech',
+        expected_review_packet_id: 'review-packet-1',
+        expected_review_packet_digest: `sha256:${'a'.repeat(64)}`,
+        action_run_id: 'legacy-action-run',
+      }),
+    ).toThrow();
+
+    expect(
+      requestWorkflowReviewFixBodySchema.parse({
+        actor_id: 'actor-tech',
+        expected_review_packet_id: 'review-packet-1',
+        expected_review_packet_digest: `sha256:${'b'.repeat(64)}`,
+      }).expected_review_packet_digest,
+    ).toBe(`sha256:${'b'.repeat(64)}`);
+    expect(() =>
+      requestWorkflowReviewFixBodySchema.parse({
+        actor_id: 'actor-tech',
+        expected_review_packet_id: 'review-packet-1',
+        expected_review_packet_digest: `sha256:${'b'.repeat(64)}`,
+        worker_id: 'worker-raw',
+      }),
+    ).toThrow();
+
+    expect(
+      abandonWorkflowSessionBodySchema.parse({
+        actor_id: 'actor-tech',
+        next_action: 'request_fix',
+        confirmation_phrase: 'abandon current session and start new session',
+        reason: 'The current session cannot be resumed safely.',
+      }).next_action,
+    ).toBe('request_fix');
+    expect(() =>
+      abandonWorkflowSessionBodySchema.parse({
+        actor_id: 'actor-tech',
+        next_action: 'request_fix',
+        confirmation_phrase: 'abandon current session and start new session',
+        reason: 'The current session cannot be resumed safely.',
+        lease_token: 'raw-token',
+      }),
+    ).toThrow();
+    expect(() =>
+      abandonWorkflowSessionBodySchema.parse({
+        actor_id: 'actor-tech',
+        next_action: 'code_review',
+        confirmation_phrase: 'abandon current session and start new session',
+        reason: 'Target status is not an explicit product next action.',
+      }),
+    ).toThrow();
   });
 
   it('validates only Wave 5 message actions', () => {

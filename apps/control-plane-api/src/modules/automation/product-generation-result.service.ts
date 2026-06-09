@@ -581,13 +581,11 @@ export class ProductGenerationResultService {
   }
 
   private runtimeJobActionBindingMatchesActionRun(runtimeJob: CodexRuntimeJob, actionRun: AutomationActionRun): boolean {
-    const workload = runtimeJob.input_json as Partial<CodexGenerationWorkloadV1>;
-    const workloadActionId = workload.plan_item_workflow_action_id;
-    const actionRunActionId = this.planItemWorkflowActionIdForActionRun(actionRun);
-    if (workloadActionId === undefined && actionRunActionId === undefined) {
-      return true;
+    if (runtimeJob.target_type !== 'automation_action_run' || runtimeJob.target_id !== actionRun.id) {
+      return false;
     }
-    return workloadActionId === actionRunActionId;
+    const workload = runtimeJob.input_json as Partial<CodexGenerationWorkloadV1>;
+    return workload.action_run_id === actionRun.id;
   }
 
   private async applyPlanItemWorkflowRuntimeResultTransition(input: {

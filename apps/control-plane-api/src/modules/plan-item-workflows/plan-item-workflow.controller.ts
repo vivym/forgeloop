@@ -4,15 +4,23 @@ import { ZodValidationPipe } from '../http/zod-validation.pipe';
 import {
   approveWorkflowArtifactRevisionBodySchema,
   artifactTypeSchema,
+  abandonWorkflowSessionBodySchema,
+  continueWorkflowExecutionBodySchema,
   evaluateWorkflowExecutionReadinessBodySchema,
   requestWorkflowArtifactChangesBodySchema,
+  requestWorkflowReviewFixBodySchema,
+  respondToWorkflowReviewBodySchema,
   runQueuedWorkflowActionBodySchema,
   startBrainstormingWorkflowSchema,
   startWorkflowExecutionBodySchema,
   workflowMessageCommandBodySchema,
   type ApproveWorkflowArtifactRevisionBodyDto,
+  type AbandonWorkflowSessionBodyDto,
+  type ContinueWorkflowExecutionBodyDto,
   type EvaluateWorkflowExecutionReadinessBodyDto,
   type RequestWorkflowArtifactChangesBodyDto,
+  type RequestWorkflowReviewFixBodyDto,
+  type RespondToWorkflowReviewBodyDto,
   type RunQueuedWorkflowActionBodyDto,
   type StartBrainstormingWorkflowDto,
   type StartWorkflowExecutionBodyDto,
@@ -93,5 +101,41 @@ export class PlanItemWorkflowController {
       response.status(result.status_code);
       return result.workflow;
     });
+  }
+
+  @Post('plan-item-workflows/:workflowId/execution/continue')
+  continueExecution(
+    @Param('workflowId') workflowId: string,
+    @Body(new ZodValidationPipe(continueWorkflowExecutionBodySchema)) body: ContinueWorkflowExecutionBodyDto,
+  ) {
+    return this.service.continueExecution(workflowId, body);
+  }
+
+  @Post('plan-item-workflows/:workflowId/code-review/respond')
+  respondToReview(
+    @Param('workflowId') workflowId: string,
+    @Body(new ZodValidationPipe(respondToWorkflowReviewBodySchema)) body: RespondToWorkflowReviewBodyDto,
+  ) {
+    return this.service.respondToReview(workflowId, body);
+  }
+
+  @Post('plan-item-workflows/:workflowId/code-review/request-fix')
+  requestReviewFix(
+    @Param('workflowId') workflowId: string,
+    @Body(new ZodValidationPipe(requestWorkflowReviewFixBodySchema)) body: RequestWorkflowReviewFixBodyDto,
+    @Res({ passthrough: true }) response: StatusResponse,
+  ) {
+    return this.service.requestReviewFix(workflowId, body).then((result) => {
+      response.status(result.status_code);
+      return result.workflow;
+    });
+  }
+
+  @Post('plan-item-workflows/:workflowId/recovery/abandon-and-new-session')
+  abandonAndStartNewSession(
+    @Param('workflowId') workflowId: string,
+    @Body(new ZodValidationPipe(abandonWorkflowSessionBodySchema)) body: AbandonWorkflowSessionBodyDto,
+  ) {
+    return this.service.abandonAndStartNewSession(workflowId, body);
   }
 }

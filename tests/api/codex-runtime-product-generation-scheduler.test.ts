@@ -16,6 +16,7 @@ import {
   type CodexGenerationWorkloadV1,
   type CodexRuntimeJob,
   type ContextManifest,
+  type PlanItemWorkflowQueuedAction,
 } from '../../packages/domain/src';
 import { InMemoryDeliveryRepository, type CreateOrReplayAutomationActionRunInput, type DeliveryRepository } from '../../packages/db/src';
 import {
@@ -217,6 +218,173 @@ describe('Product generation CodexSession scheduler', () => {
       input_environment_manifest_ref: expect.stringContaining('/codex_environment_manifest/codex_session/'),
       input_environment_manifest_digest: expect.stringMatching(/^sha256:/),
     });
+  });
+
+  it('schedules review responses through plan item workflow action generation without automation action runs', async () => {
+    const seeded = await seedSchedulerWorkflow('reviewrs');
+    const firstTurnId = await createTurn(seeded.workflow.id, seeded.workflow.active_codex_session_id, seeded.ids.actorTech, 'reviewrs01');
+    await bindSessionThread(seeded.workflow.active_codex_session_id, seeded.workflow.id, firstTurnId);
+    const latestCapsuleDigest = normalizeLatestSessionCapsuleDigest(repository, seeded.workflow.active_codex_session_id, 'reviewrs-capsule');
+    const reviewTurnId = await createTurn(seeded.workflow.id, seeded.workflow.active_codex_session_id, seeded.ids.actorTech, 'reviewrs02', {
+      expected_input_capsule_digest: latestCapsuleDigest,
+    });
+    const action = await createQueuedReviewResponseAction(
+      seeded.workflow.id,
+      seeded.workflow.active_codex_session_id,
+      reviewTurnId,
+      seeded.ids.actorTech,
+      'reviewrs-action',
+      latestCapsuleDigest,
+    );
+    const createAutomationRun = vi.spyOn(repository, 'createOrReplayAutomationActionRun');
+    const claimAutomationRun = vi.spyOn(repository, 'claimAutomationActionRun');
+
+    const scheduled = await scheduler.schedulePlanItemWorkflowReviewResponse({
+      repository,
+      action,
+      review_packet_id: 'review-packet-1',
+      review_packet_digest: codexCanonicalDigest({ review_packet_id: 'review-packet-1', version: 1 }),
+      previous_run_session_id: 'run-previous-1',
+      prompt_version: 'review-response:v1',
+      context_manifest: contextManifest(seeded.ids.project),
+      signed_context_json: {
+        schema_version: 'review_response_context.v1',
+        plan_item_workflow_action_id: action.id,
+        review_packet_id: 'review-packet-1',
+        previous_run_session_id: 'stale-run-session-from-context',
+      },
+      project_id: seeded.ids.project,
+      repo_ids: [],
+    });
+
+    expect(createAutomationRun).not.toHaveBeenCalled();
+    expect(claimAutomationRun).not.toHaveBeenCalled();
+    expect(scheduled).not.toHaveProperty('action_run');
+    expect(await repository.getAutomationActionRun(action.id)).toBeUndefined();
+    await expect(repository.getPlanItemWorkflowQueuedAction({ workflow_id: action.workflow_id, action_id: action.id })).resolves.toMatchObject({
+      status: 'running',
+      codex_session_turn_id: reviewTurnId,
+    });
+    const runtimeJob = (await repository.getCodexRuntimeJob({ runtime_job_id: scheduled.runtime_job.id }))!;
+    expect(runtimeJob).toMatchObject({
+      target_type: 'plan_item_workflow_action',
+      target_id: action.id,
+      target_kind: 'generation',
+      workflow_id: seeded.workflow.id,
+      codex_session_id: seeded.workflow.active_codex_session_id,
+      codex_session_turn_id: reviewTurnId,
+    });
+    const workload = runtimeJob.input_json as CodexGenerationWorkloadV1;
+    expect(workload).toMatchObject({
+      task_kind: 'review_response',
+      output_schema_version: 'review_response.v1',
+      plan_item_workflow_action_id: action.id,
+      plan_item_workflow_id: seeded.workflow.id,
+      codex_session_id: seeded.workflow.active_codex_session_id,
+      codex_session_turn_id: reviewTurnId,
+      review_packet_id: 'review-packet-1',
+      review_packet_digest: codexCanonicalDigest({ review_packet_id: 'review-packet-1', version: 1 }),
+      codex_session_runtime_context: {
+        continuation: { kind: 'resume_thread' },
+        expected_input_capsule_digest: latestCapsuleDigest,
+        turn_group_status: 'complete',
+      },
+    });
+    expect(workload).not.toHaveProperty('action_run_id');
+    const workspaceAcquisition = runtimeJob.workspace_acquisition_json as {
+      signed_context_digest: string;
+      signed_context_json: Record<string, unknown>;
+    };
+    expect(workspaceAcquisition.signed_context_json).toMatchObject({
+      previous_run_session_id: 'run-previous-1',
+    });
+    expect(workspaceAcquisition.signed_context_digest).toBe(workload.signed_context_digest);
+    expect(workload.signed_context_digest).toBe(codexCanonicalDigest(workspaceAcquisition.signed_context_json));
+    expect(scheduled.runtime_job.input).toEqual({
+      input_digest: runtimeJob.input_digest,
+      schema_version: 'codex_generation_workload.v1',
+    });
+  });
+
+  it('rejects review response scheduling when the latest capsule row is stale', async () => {
+    const seeded = await seedSchedulerWorkflow('reviewstale01');
+    const firstTurnId = await createTurn(seeded.workflow.id, seeded.workflow.active_codex_session_id, seeded.ids.actorTech, 'reviewstale01a');
+    await bindSessionThread(seeded.workflow.active_codex_session_id, seeded.workflow.id, firstTurnId);
+    normalizeLatestSessionCapsuleDigest(repository, seeded.workflow.active_codex_session_id, 'reviewstale01-capsule');
+    const session = await repository.getCodexSession(seeded.workflow.active_codex_session_id);
+    const staleDigest = capsuleDigest('review-response-stale-capsule');
+    (repository as unknown as { codexSessions: Map<string, unknown> }).codexSessions.set(session!.id, {
+      ...session!,
+      latest_capsule_digest: staleDigest,
+    });
+    const reviewTurnId = await createTurn(seeded.workflow.id, seeded.workflow.active_codex_session_id, seeded.ids.actorTech, 'reviewstale01b', {
+      expected_input_capsule_digest: staleDigest,
+    });
+    const action = await createQueuedReviewResponseAction(
+      seeded.workflow.id,
+      seeded.workflow.active_codex_session_id,
+      reviewTurnId,
+      seeded.ids.actorTech,
+      'reviewstale-action',
+      staleDigest,
+    );
+
+    await expect(
+      scheduler.schedulePlanItemWorkflowReviewResponse({
+        repository,
+        action,
+        review_packet_id: 'review-packet-stale',
+        review_packet_digest: codexCanonicalDigest({ review_packet_id: 'review-packet-stale', version: 1 }),
+        previous_run_session_id: 'run-previous-stale',
+        prompt_version: 'review-response:v1',
+        context_manifest: contextManifest(seeded.ids.project),
+        signed_context_json: { schema_version: 'review_response_context.v1' },
+        project_id: seeded.ids.project,
+        repo_ids: [],
+      }),
+    ).rejects.toMatchObject({ code: 'codex_runtime_capsule_stale' });
+
+    await expect(scheduler.runtimeJobForPlanItemWorkflowAction(repository, action, 'review_response')).resolves.toBeUndefined();
+  });
+
+  it('rejects review response scheduling when latest memory lineage is stale', async () => {
+    const seeded = await seedSchedulerWorkflow('reviewstale02');
+    const firstTurnId = await createTurn(seeded.workflow.id, seeded.workflow.active_codex_session_id, seeded.ids.actorTech, 'reviewstale02a');
+    await bindSessionThread(seeded.workflow.active_codex_session_id, seeded.workflow.id, firstTurnId);
+    const latestCapsuleDigest = normalizeLatestSessionCapsuleDigest(repository, seeded.workflow.active_codex_session_id, 'reviewstale02-capsule');
+    const session = await repository.getCodexSession(seeded.workflow.active_codex_session_id);
+    (repository as unknown as { codexSessions: Map<string, unknown> }).codexSessions.set(session!.id, {
+      ...session!,
+      latest_memory_bundle_digest: capsuleDigest('review-response-stale-memory'),
+    });
+    const reviewTurnId = await createTurn(seeded.workflow.id, seeded.workflow.active_codex_session_id, seeded.ids.actorTech, 'reviewstale02b', {
+      expected_input_capsule_digest: latestCapsuleDigest,
+    });
+    const action = await createQueuedReviewResponseAction(
+      seeded.workflow.id,
+      seeded.workflow.active_codex_session_id,
+      reviewTurnId,
+      seeded.ids.actorTech,
+      'reviewstale-memory-action',
+      latestCapsuleDigest,
+    );
+
+    await expect(
+      scheduler.schedulePlanItemWorkflowReviewResponse({
+        repository,
+        action,
+        review_packet_id: 'review-packet-stale-memory',
+        review_packet_digest: codexCanonicalDigest({ review_packet_id: 'review-packet-stale-memory', version: 1 }),
+        previous_run_session_id: 'run-previous-stale-memory',
+        prompt_version: 'review-response:v1',
+        context_manifest: contextManifest(seeded.ids.project),
+        signed_context_json: { schema_version: 'review_response_context.v1' },
+        project_id: seeded.ids.project,
+        repo_ids: [],
+      }),
+    ).rejects.toMatchObject({ code: 'codex_runtime_capsule_stale' });
+
+    await expect(scheduler.runtimeJobForPlanItemWorkflowAction(repository, action, 'review_response')).resolves.toBeUndefined();
   });
 
   it('routes a bound active session even when its single-concurrency runner worker is occupied by the live runner', async () => {
@@ -1453,6 +1621,30 @@ describe('Product generation CodexSession scheduler', () => {
     });
   }
 
+  async function createQueuedReviewResponseAction(
+    workflowId: string,
+    sessionId: string,
+    turnId: string,
+    actorId: string,
+    suffix: string,
+    expectedInputCapsuleDigest: string,
+  ): Promise<PlanItemWorkflowQueuedAction> {
+    return repository.createOrReplayPlanItemWorkflowQueuedAction({
+      id: stableUuid({ kind: 'review-response-action', suffix }),
+      workflow_id: workflowId,
+      codex_session_id: sessionId,
+      kind: 'respond_to_review',
+      status: 'queued',
+      context_preview_digest: codexCanonicalDigest({ kind: 'review-response-context', suffix }),
+      idempotency_key: codexCanonicalDigest({ kind: 'review-response-idempotency', suffix }),
+      codex_session_turn_id: turnId,
+      expected_input_capsule_digest: expectedInputCapsuleDigest,
+      created_by_actor_id: actorId,
+      created_at: now,
+      updated_at: now,
+    });
+  }
+
   async function createLiveSessionRunner(
     workflowId: string,
     sessionId: string,
@@ -1909,6 +2101,38 @@ function runtimeCapsule(input: {
 
 function capsuleDigest(label: string): string {
   return codexCanonicalDigest({ kind: 'test-codex-runtime-capsule-digest', label });
+}
+
+function normalizeLatestSessionCapsuleDigest(repository: DeliveryRepository, sessionId: string, label: string): string {
+  const privateRepository = repository as unknown as {
+    codexSessions: Map<string, Record<string, unknown>>;
+    codexRuntimeCapsules: Map<string, CodexRuntimeCapsule>;
+    codexSessionTurns: Map<string, Record<string, unknown>>;
+  };
+  const session = privateRepository.codexSessions.get(sessionId);
+  const latestCapsuleId = typeof session?.latest_capsule_id === 'string' ? session.latest_capsule_id : undefined;
+  if (session === undefined || latestCapsuleId === undefined) {
+    throw new Error(`Expected latest capsule for Codex session ${sessionId}`);
+  }
+  const capsule = privateRepository.codexRuntimeCapsules.get(latestCapsuleId);
+  const producerTurn = capsule === undefined ? undefined : privateRepository.codexSessionTurns.get(capsule.created_from_turn_id);
+  if (capsule === undefined || producerTurn === undefined) {
+    throw new Error(`Expected latest capsule lineage for Codex session ${sessionId}`);
+  }
+  const latestCapsuleDigest = capsuleDigest(label);
+  privateRepository.codexRuntimeCapsules.set(capsule.id, {
+    ...capsule,
+    digest: latestCapsuleDigest,
+  });
+  privateRepository.codexSessionTurns.set(capsule.created_from_turn_id, {
+    ...producerTurn,
+    output_capsule_digest: latestCapsuleDigest,
+  });
+  privateRepository.codexSessions.set(sessionId, {
+    ...session,
+    latest_capsule_digest: latestCapsuleDigest,
+  });
+  return latestCapsuleDigest;
 }
 
 function trustedLeaseOutputCapsuleBody(input: {

@@ -29,6 +29,10 @@ export function PlanItemWorkflowWorkspace({
   const [messageAction, setMessageAction] = useState<'answer_boundary_question' | 'continue_ai'>('continue_ai');
   const [messageBody, setMessageBody] = useState('');
   const [feedback, setFeedback] = useState('');
+  const [reviewResponsePrompt, setReviewResponsePrompt] = useState('');
+  const [fixInstruction, setFixInstruction] = useState('');
+  const [abandonReason, setAbandonReason] = useState('');
+  const [abandonPhrase, setAbandonPhrase] = useState('');
   const [notice, setNotice] = useState<string>();
   const [error, setError] = useState<string>();
   const [runningLabel, setRunningLabel] = useState<string>();
@@ -43,6 +47,15 @@ export function PlanItemWorkflowWorkspace({
     workflowId,
   });
   const selectedArtifact = model.artifacts.find((artifact) => artifact.artifactType === selectedArtifactType) ?? model.defaultArtifact;
+  const currentReviewPacket = model.codeReviewLens.currentPacket;
+  const abandonOption = model.recoveryPanel.abandonOption;
+  const abandonConfirmationPhrase = 'abandon current session and start new session';
+  const canAbandon =
+    abandonOption?.enabled === true &&
+    abandonOption.next_action !== undefined &&
+    abandonPhrase.trim() === abandonConfirmationPhrase &&
+    abandonReason.trim().length > 0 &&
+    runningLabel === undefined;
 
   async function run(label: string, operation: () => Promise<unknown>) {
     setRunningLabel(label);
@@ -296,6 +309,205 @@ export function PlanItemWorkflowWorkspace({
             ) : (
               <p className="text-sm text-text-secondary">Execution has not started from this Plan Item workflow.</p>
             )}
+            <div className="grid gap-2 text-sm">
+              <div className="grid gap-1">
+                <span className="text-xs font-semibold uppercase tracking-normal text-text-muted">Same-session digest</span>
+                <span className="break-all font-mono text-xs text-text-secondary">{model.executionLens.sameSessionDigest}</span>
+              </div>
+              {model.executionLens.currentAttempt ? (
+                <div className="grid gap-1">
+                  <span className="text-xs font-semibold uppercase tracking-normal text-text-muted">Current run attempt</span>
+                  <span className="text-text-secondary">
+                    {model.executionLens.currentAttempt.attemptKind} · {model.executionLens.currentAttempt.status}
+                  </span>
+                </div>
+              ) : null}
+              {model.executionLens.attemptRows.length > 0 ? (
+                <div className="grid gap-1" aria-label="Attempt timeline">
+                  {model.executionLens.attemptRows.map((attempt) => (
+                    <div className="rounded-md border border-border bg-surface px-3 py-2" key={attempt.id}>
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <span className="font-semibold text-text-primary">{attempt.attemptKind}</span>
+                        <StatusPill>{attempt.status}</StatusPill>
+                      </div>
+                      <p className="break-words text-text-secondary">{attempt.runSessionId}</p>
+                      <p className="text-text-muted">{attempt.continuationCount} continuation event(s)</p>
+                    </div>
+                  ))}
+                </div>
+              ) : null}
+            </div>
+            {model.executionLens.canContinue ? (
+              <Button
+                disabled={runningLabel !== undefined}
+                onClick={() => void run('Continue execution', () => commandMutations.continueExecution.mutateAsync({ actor_id: actorId }))}
+                type="button"
+              >
+                Continue execution
+              </Button>
+            ) : model.executionLens.continueDisabledReason ? (
+              <InlineNotice title={model.executionLens.continueDisabledReason} tone="warning" />
+            ) : null}
+          </section>
+
+          <section aria-label="Code Review lens" className="grid gap-3 rounded-md border border-border bg-background p-3">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <p className="text-sm font-semibold text-text-primary">Code Review</p>
+              <StatusPill tone={currentReviewPacket?.decision === 'changes_requested' ? 'warning' : 'neutral'}>
+                {currentReviewPacket?.status ?? model.workflow.status}
+              </StatusPill>
+            </div>
+            {currentReviewPacket ? (
+              <div className="grid gap-2 text-sm">
+                <div className="grid gap-1">
+                  <span className="text-xs font-semibold uppercase tracking-normal text-text-muted">Current Review Packet</span>
+                  <span className="break-words text-text-secondary">{currentReviewPacket.id}</span>
+                  <span className="break-all font-mono text-xs text-text-secondary">{currentReviewPacket.digest}</span>
+                </div>
+                {currentReviewPacket.summary ? <p className="text-text-secondary">{currentReviewPacket.summary}</p> : null}
+                {currentReviewPacket.evidenceRefs.length > 0 ? (
+                  <div className="grid gap-1" aria-label="Review Packet evidence">
+                    {currentReviewPacket.evidenceRefs.map((ref) => (
+                      <div className="rounded-md border border-border bg-surface px-3 py-2" key={ref.id}>
+                        <p className="font-semibold text-text-primary">{ref.label}</p>
+                        <p className="break-all font-mono text-xs text-text-secondary">{ref.digest}</p>
+                        <p className="text-xs text-text-muted">{ref.visibility}</p>
+                      </div>
+                    ))}
+                  </div>
+                ) : null}
+              </div>
+            ) : (
+              <p className="text-sm text-text-secondary">No current Review Packet is projected for this workflow.</p>
+            )}
+            {model.codeReviewLens.latestResponse ? (
+              <div className="grid gap-2 rounded-md border border-border bg-surface px-3 py-2 text-sm">
+                <p className="font-semibold text-text-primary">Latest ReviewResponse</p>
+                <p className="text-text-secondary">
+                  {model.codeReviewLens.latestResponse.id} · {model.codeReviewLens.latestResponse.status}
+                </p>
+                {model.codeReviewLens.latestResponse.summary ? (
+                  <p className="text-text-secondary">{model.codeReviewLens.latestResponse.summary}</p>
+                ) : null}
+                {model.codeReviewLens.latestResponse.responseMarkdown ? (
+                  <pre className="max-h-40 overflow-auto whitespace-pre-wrap rounded-md bg-surface-subtle px-3 py-2 font-sans text-xs text-text-secondary">
+                    {model.codeReviewLens.latestResponse.responseMarkdown}
+                  </pre>
+                ) : null}
+              </div>
+            ) : null}
+            <label className="grid gap-1 text-sm font-semibold text-text-primary">
+              Review response prompt
+              <textarea
+                className="min-h-20 rounded-md border border-border bg-surface px-3 py-2 text-sm"
+                onChange={(event) => setReviewResponsePrompt(event.currentTarget.value)}
+                value={reviewResponsePrompt}
+              />
+            </label>
+            <Button
+              disabled={runningLabel !== undefined || !model.codeReviewLens.canRespond || currentReviewPacket === undefined}
+              onClick={() =>
+                currentReviewPacket === undefined
+                  ? undefined
+                  : void run('Respond to review', () =>
+                      commandMutations.respondToReview.mutateAsync({
+                        actor_id: actorId,
+                        expected_review_packet_id: currentReviewPacket.id,
+                        expected_review_packet_digest: currentReviewPacket.digest,
+                        ...(reviewResponsePrompt.trim().length === 0 ? {} : { response_prompt_markdown: reviewResponsePrompt.trim() }),
+                      }),
+                    )
+              }
+              type="button"
+              variant="secondary"
+            >
+              Respond to review
+            </Button>
+            {model.codeReviewLens.respondDisabledReason ? <InlineNotice title={model.codeReviewLens.respondDisabledReason} tone="warning" /> : null}
+            <label className="grid gap-1 text-sm font-semibold text-text-primary">
+              Fix instruction
+              <textarea
+                className="min-h-20 rounded-md border border-border bg-surface px-3 py-2 text-sm"
+                onChange={(event) => setFixInstruction(event.currentTarget.value)}
+                value={fixInstruction}
+              />
+            </label>
+            <Button
+              disabled={runningLabel !== undefined || !model.codeReviewLens.canRequestFix || currentReviewPacket === undefined}
+              onClick={() =>
+                currentReviewPacket === undefined
+                  ? undefined
+                  : void run('Request fix', () =>
+                      commandMutations.requestFix.mutateAsync({
+                        actor_id: actorId,
+                        expected_review_packet_id: currentReviewPacket.id,
+                        expected_review_packet_digest: currentReviewPacket.digest,
+                        ...(fixInstruction.trim().length === 0 ? {} : { fix_instruction_markdown: fixInstruction.trim() }),
+                      }),
+                    )
+              }
+              type="button"
+            >
+              Request fix
+            </Button>
+            {model.codeReviewLens.requestFixDisabledReason ? (
+              <InlineNotice title={model.codeReviewLens.requestFixDisabledReason} tone="warning" />
+            ) : null}
+          </section>
+
+          <section aria-label="Recovery panel" className="grid gap-3 rounded-md border border-border bg-background p-3">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <p className="text-sm font-semibold text-text-primary">Recovery</p>
+              <StatusPill tone="neutral">Manual</StatusPill>
+            </div>
+            <div className="grid gap-2 text-sm">
+              {model.recoveryPanel.options.map((option) => (
+                <div className="rounded-md border border-border bg-surface px-3 py-2" key={option.action_id}>
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <span className="font-semibold text-text-primary">{option.action_id.replace(/_/g, ' ')}</span>
+                    <StatusPill tone={option.enabled ? 'success' : 'neutral'}>{option.enabled ? 'available' : 'unavailable'}</StatusPill>
+                  </div>
+                  {option.next_action ? <p className="text-text-secondary">Next action: {option.next_action}</p> : null}
+                  {option.warning_copy ? <p className="text-text-muted">{option.warning_copy}</p> : null}
+                </div>
+              ))}
+            </div>
+            <label className="grid gap-1 text-sm font-semibold text-text-primary">
+              Abandon reason
+              <textarea
+                className="min-h-20 rounded-md border border-border bg-surface px-3 py-2 text-sm"
+                onChange={(event) => setAbandonReason(event.currentTarget.value)}
+                value={abandonReason}
+              />
+            </label>
+            <label className="grid gap-1 text-sm font-semibold text-text-primary">
+              Type confirmation phrase
+              <input
+                className="min-h-10 rounded-md border border-border bg-surface px-3 text-sm"
+                onChange={(event) => setAbandonPhrase(event.currentTarget.value)}
+                value={abandonPhrase}
+              />
+            </label>
+            <p className="break-words text-xs text-text-muted">{abandonConfirmationPhrase}</p>
+            <Button
+              disabled={!canAbandon}
+              onClick={() =>
+                abandonOption?.next_action === undefined
+                  ? undefined
+                  : void run('Abandon current session', () =>
+                      commandMutations.abandonNewSession.mutateAsync({
+                        actor_id: actorId,
+                        next_action: abandonOption.next_action!,
+                        confirmation_phrase: abandonConfirmationPhrase,
+                        reason: abandonReason.trim(),
+                      }),
+                    )
+              }
+              type="button"
+              variant="secondary"
+            >
+              Abandon current session
+            </Button>
           </section>
         </div>
       </aside>

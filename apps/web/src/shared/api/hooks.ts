@@ -3,10 +3,14 @@ import type { QueryClient } from '@tanstack/react-query';
 
 import {
   createForgeloopCommandApi,
+  type AbandonWorkflowSessionBody,
   type ApproveWorkflowArtifactRevisionBody,
+  type ContinueWorkflowExecutionBody,
   type EvaluateWorkflowExecutionReadinessBody,
   type RequestWorkflowArtifactChangesBody,
+  type RequestWorkflowReviewFixBody,
   type RevisionCompareQuery,
+  type RespondToWorkflowReviewBody,
   type RunQueuedWorkflowActionBody,
   type StartPlanItemWorkflowExecutionBody,
   type StartPlanItemWorkflowBrainstormingBody,
@@ -640,6 +644,38 @@ export function usePlanItemWorkflowCommandMutation(input: { developmentPlanId: s
             ? Promise.resolve()
             : invalidateRunDetail(queryClient, workflow.execution_run_summary.run_session_id),
         ]),
+    }),
+    continueExecution: useMutation({
+      mutationFn: (body: ContinueWorkflowExecutionBody) =>
+        createCommandApi().continuePlanItemWorkflowExecution(requiredId(input.workflowId, 'workflowId'), body),
+      onSuccess: (workflow) =>
+        Promise.all([
+          invalidate(),
+          workflow.execution_run_summary?.run_session_id === undefined
+            ? Promise.resolve()
+            : invalidateRunDetail(queryClient, workflow.execution_run_summary.run_session_id),
+        ]),
+    }),
+    respondToReview: useMutation({
+      mutationFn: (body: RespondToWorkflowReviewBody) =>
+        createCommandApi().respondToPlanItemWorkflowReview(requiredId(input.workflowId, 'workflowId'), body),
+      onSuccess: invalidate,
+    }),
+    requestFix: useMutation({
+      mutationFn: (body: RequestWorkflowReviewFixBody) =>
+        createCommandApi().requestPlanItemWorkflowReviewFix(requiredId(input.workflowId, 'workflowId'), body),
+      onSuccess: (workflow) =>
+        Promise.all([
+          invalidate(),
+          workflow.execution_run_summary?.run_session_id === undefined
+            ? Promise.resolve()
+            : invalidateRunDetail(queryClient, workflow.execution_run_summary.run_session_id),
+        ]),
+    }),
+    abandonNewSession: useMutation({
+      mutationFn: (body: AbandonWorkflowSessionBody) =>
+        createCommandApi().abandonPlanItemWorkflowSession(requiredId(input.workflowId, 'workflowId'), body),
+      onSuccess: invalidate,
     }),
   };
 }

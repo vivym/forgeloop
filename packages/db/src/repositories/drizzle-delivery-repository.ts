@@ -69,9 +69,13 @@ import type {
   ReleaseWorkItem,
   QaHandoff,
   ReviewPacket,
+  ReviewPacketEvidenceRef,
+  ReviewResponse,
   RunCommand,
   RunEvent,
   RunSession,
+  RunSessionAttemptLineage,
+  ExecutionContinuationLineage,
   RunWorkerLease,
   Spec,
   SpecRevision,
@@ -108,6 +112,7 @@ import {
   collectCodexRuntimeJobTerminalArtifactRefs,
   normalizeCodexRuntimeNetworkPolicy,
   validateCodexLaunchTargetKind,
+  validateCodexGenerationWorkload,
   validateCodexRuntimeJobArtifactIntake,
   validateCodexRuntimeJobTerminalResult,
   validateCodexRuntimeProfileRevision,
@@ -188,7 +193,11 @@ import {
   release_execution_packages,
   release_work_items,
   releases,
+  execution_continuation_lineages,
+  review_packet_evidence_refs,
   review_packets,
+  review_responses,
+  run_session_attempt_lineages,
   run_commands,
   run_event_counters,
   run_events,
@@ -236,6 +245,7 @@ import type {
   CreateOrReplayAutomationActionRunInput,
   DisableAutomationProjectSettingsInput,
   ExecutionPackageGenerationPackageRecord,
+  FindCurrentReviewPacketForWorkflowInput,
   FinishCommandIdempotencyInput,
   FindAvailableCodexWorkerInput,
   FindCodexWorkerForSessionRunnerInput,
@@ -306,6 +316,7 @@ import type {
   ApplyPlanItemWorkflowTransitionInput,
   CreateCodexSessionForkInput,
   CreatePlanItemWorkflowWithInitialSessionInput,
+  ReplaceActiveCodexSessionForWorkflowInput,
   RecoverCodexSessionLeaseForClaimInput,
   RenewCodexSessionLeaseInput,
   RenewCodexSessionRunnerOwnerInput,
@@ -504,6 +515,87 @@ const createWorkflowRunExecutionLineageMatches = (input: CreateOrReplayCodexRunt
     );
   } catch {
     return false;
+  }
+};
+
+const createWorkflowPlanItemActionGenerationLineageMatches = (
+  input: CreateOrReplayCodexRuntimeJobWithLeaseAndEnvelopeInput,
+): boolean => {
+  if (input.target.target_type !== 'plan_item_workflow_action') {
+    return true;
+  }
+  if (input.target.target_kind !== 'generation') {
+    return false;
+  }
+  if (input.workflow_id === undefined || input.codex_session_id === undefined || input.codex_session_turn_id === undefined) {
+    return false;
+  }
+  try {
+    const workload = validateCodexGenerationWorkload(input.input_json);
+    return (
+      workload.task_kind === 'review_response' &&
+      workload.runtime_job_id === input.runtime_job_id &&
+      workload.plan_item_workflow_action_id === input.target.target_id &&
+      workload.plan_item_workflow_id === input.workflow_id &&
+      workload.codex_session_id === input.codex_session_id &&
+      workload.codex_session_turn_id === input.codex_session_turn_id
+    );
+  } catch {
+    return false;
+  }
+};
+
+const hasLineageText = (value: unknown): value is string => typeof value === 'string' && value.length > 0;
+
+const validateRunSessionAttemptLineage = (lineage: RunSessionAttemptLineage): void => {
+  if (
+    lineage.attempt_kind === 'review_fix' &&
+    (!hasLineageText(lineage.previous_run_session_id) || !hasLineageText(lineage.previous_review_packet_id))
+  ) {
+    throw new DomainError(
+      'workflow_invalid_transition',
+      `workflow_invalid_transition: Review fix run session attempt lineage ${lineage.run_session_id} is missing predecessor lineage`,
+    );
+  }
+  if (
+    lineage.attempt_kind === 'first_execution' &&
+    (lineage.previous_run_session_id !== undefined ||
+      lineage.previous_review_packet_id !== undefined ||
+      lineage.review_response_id !== undefined)
+  ) {
+    throw new DomainError(
+      'workflow_invalid_transition',
+      `workflow_invalid_transition: First execution run session attempt lineage ${lineage.run_session_id} cannot carry review-fix predecessor lineage`,
+    );
+  }
+};
+
+const validateExecutionContinuationLineage = (lineage: ExecutionContinuationLineage): void => {
+  if (
+    !hasLineageText(lineage.previous_runtime_job_id) ||
+    !hasLineageText(lineage.previous_capsule_digest) ||
+    !hasLineageText(lineage.expected_input_capsule_digest) ||
+    !hasLineageText(lineage.previous_codex_session_lease_id)
+  ) {
+    throw new DomainError(
+      'workflow_invalid_transition',
+      `workflow_invalid_transition: Execution continuation lineage ${lineage.id} is missing proof lineage`,
+    );
+  }
+  if (
+    (lineage.continuation_kind === 'existing_job_input' || lineage.continuation_kind === 'replay_current_continuation') &&
+    lineage.new_runtime_job_id !== undefined
+  ) {
+    throw new DomainError(
+      'workflow_invalid_transition',
+      `workflow_invalid_transition: Execution continuation lineage ${lineage.id} cannot create a new runtime job for ${lineage.continuation_kind}`,
+    );
+  }
+  if (lineage.continuation_kind === 'relaunch_after_fencing' && !hasLineageText(lineage.new_runtime_job_id)) {
+    throw new DomainError(
+      'workflow_invalid_transition',
+      `workflow_invalid_transition: Execution continuation lineage ${lineage.id} requires a new runtime job for relaunch_after_fencing`,
+    );
   }
 };
 
@@ -1833,6 +1925,80 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
     }
     await this.assertCanSaveCodexSession(session);
     await this.db.update(codex_sessions).set(toDbRecord(session, codex_sessions) as never).where(eq(codex_sessions.id, session.id));
+  }
+
+  async replaceActiveCodexSessionForWorkflow(
+    input: ReplaceActiveCodexSessionForWorkflowInput,
+  ): Promise<{ workflow: PlanItemWorkflow; previous_session: CodexSession; session: CodexSession }> {
+    return this.withObjectLock(`plan-item-workflow:${input.workflow_id}`, async (repository) =>
+      (repository as DrizzleDeliveryRepository).replaceActiveCodexSessionForWorkflowUnlocked(input),
+    );
+  }
+
+  private async replaceActiveCodexSessionForWorkflowUnlocked(
+    input: ReplaceActiveCodexSessionForWorkflowInput,
+  ): Promise<{ workflow: PlanItemWorkflow; previous_session: CodexSession; session: CodexSession }> {
+    const workflow = await this.getPlanItemWorkflow(input.workflow_id);
+    const previousSession = await this.getCodexSession(input.previous_session_id);
+    if (
+      workflow === undefined ||
+      previousSession === undefined ||
+      workflow.active_codex_session_id !== previousSession.id ||
+      previousSession.owner_type !== 'plan_item_workflow' ||
+      previousSession.owner_id !== workflow.id ||
+      previousSession.role !== 'active' ||
+      previousSession.status === 'archived' ||
+      (await this.getCodexSession(input.new_session_id)) !== undefined
+    ) {
+      throw new DomainError(
+        'workflow_active_session_conflict',
+        `workflow_active_session_conflict: Cannot replace active Codex session for workflow ${input.workflow_id}`,
+      );
+    }
+    const {
+      active_lease_id: _activeLeaseId,
+      runner_worker_id: _runnerWorkerId,
+      runner_launch_lease_id: _runnerLaunchLeaseId,
+      runner_runtime_job_id: _runnerRuntimeJobId,
+      runner_expires_at: _runnerExpiresAt,
+      ...previousSessionBase
+    } = previousSession;
+    const archivedPrevious: CodexSession = {
+      ...previousSessionBase,
+      status: 'archived',
+      archived_at: input.now,
+      updated_at: input.now,
+    };
+    const session: CodexSession = {
+      id: input.new_session_id,
+      owner_type: 'plan_item_workflow',
+      owner_id: workflow.id,
+      status: 'idle',
+      role: 'active',
+      runtime_profile_id: input.runtime_profile_id,
+      runtime_profile_revision_id: input.runtime_profile_revision_id,
+      credential_binding_id: input.credential_binding_id,
+      credential_binding_version_id: input.credential_binding_version_id,
+      lease_epoch: 0,
+      created_by_actor_id: input.actor_id,
+      created_at: input.now,
+      updated_at: input.now,
+    };
+    const updatedWorkflow: PlanItemWorkflow = {
+      ...workflow,
+      active_codex_session_id: session.id,
+      updated_at: input.now,
+    };
+    await this.assertCanSaveCodexSession(archivedPrevious);
+    await this.assertCanSavePlanItemWorkflow(updatedWorkflow);
+    await this.db.update(codex_sessions).set(toDbRecord(archivedPrevious, codex_sessions) as never).where(eq(codex_sessions.id, archivedPrevious.id));
+    await this.assertCanSaveCodexSession(session);
+    await this.db.insert(codex_sessions).values(toDbRecord(session, codex_sessions) as never);
+    await this.db
+      .update(plan_item_workflows)
+      .set(toDbRecord(updatedWorkflow, plan_item_workflows) as never)
+      .where(eq(plan_item_workflows.id, updatedWorkflow.id));
+    return { workflow: updatedWorkflow, previous_session: archivedPrevious, session };
   }
 
   async createCodexSessionTurn(turn: CodexSessionTurn): Promise<void> {
@@ -3210,7 +3376,7 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
     return { workflow: updatedWorkflow, selectedSession: activeSelected };
   }
 
-  private async getCodexSessionLease(id: string): Promise<CodexSessionLease | undefined> {
+  async getCodexSessionLease(id: string): Promise<CodexSessionLease | undefined> {
     return this.getById(codex_session_leases, codex_session_leases.id, id);
   }
 
@@ -6024,6 +6190,9 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
     if (existingLeaseForTargetAttempt !== undefined) {
       throw codexDenied('codex_runtime_job_unavailable', 'Runtime job target attempt already has a launch lease.');
     }
+    if (!createWorkflowPlanItemActionGenerationLineageMatches(input)) {
+      throw codexDenied('codex_runtime_job_unavailable', 'Runtime job workflow action generation lineage was rejected.');
+    }
 
     if (!(await this.codexRuntimeJobCreateIdsAreUnused(input))) {
       throw codexDenied('codex_runtime_job_unavailable', 'Codex runtime job immutable id was already used.');
@@ -6423,6 +6592,9 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
 
   private codexRuntimeJobHasRequiredLaunchFence(input: CreateOrReplayCodexRuntimeJobWithLeaseAndEnvelopeInput): boolean {
     if (input.target.target_kind === 'generation') {
+      if (input.target.target_type === 'plan_item_workflow_action') {
+        return true;
+      }
       return (
         input.action_type !== undefined &&
         input.action_attempt !== undefined &&
@@ -8768,6 +8940,125 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
     return row === undefined ? undefined : fromDbRecord<ReviewPacket>(row);
   }
 
+  async saveReviewPacketEvidenceRef(ref: ReviewPacketEvidenceRef): Promise<void> {
+    await this.upsert(review_packet_evidence_refs, review_packet_evidence_refs.id, ref);
+  }
+
+  async listReviewPacketEvidenceRefs(reviewPacketId: string): Promise<ReviewPacketEvidenceRef[]> {
+    return this.listWhere<ReviewPacketEvidenceRef>(
+      review_packet_evidence_refs,
+      eq(review_packet_evidence_refs.reviewPacketId, reviewPacketId),
+      [review_packet_evidence_refs.createdAt, review_packet_evidence_refs.id],
+    );
+  }
+
+  async saveReviewResponse(response: ReviewResponse): Promise<void> {
+    await this.upsert(review_responses, review_responses.id, response);
+  }
+
+  async getReviewResponse(id: string): Promise<ReviewResponse | undefined> {
+    return this.getById(review_responses, review_responses.id, id);
+  }
+
+  async getLatestReviewResponseForWorkflow(workflowId: string): Promise<ReviewResponse | undefined> {
+    const [row] = await this.db
+      .select()
+      .from(review_responses)
+      .where(eq(review_responses.workflowId, workflowId))
+      .orderBy(desc(review_responses.createdAt), desc(review_responses.id))
+      .limit(1);
+    return row === undefined ? undefined : fromDbRecord<ReviewResponse>(row as Record<string, unknown>);
+  }
+
+  async saveRunSessionAttemptLineage(lineage: RunSessionAttemptLineage): Promise<void> {
+    validateRunSessionAttemptLineage(lineage);
+    const existing = await this.getById(
+      run_session_attempt_lineages,
+      run_session_attempt_lineages.runSessionId,
+      lineage.run_session_id,
+    );
+    if (existing !== undefined) {
+      throw new DomainError(
+        'workflow_invalid_transition',
+        `workflow_invalid_transition: Run session attempt lineage ${lineage.run_session_id} already exists`,
+      );
+    }
+    await this.db.insert(run_session_attempt_lineages).values(toDbRecord(lineage, run_session_attempt_lineages) as never);
+  }
+
+  async listRunSessionAttemptLineage(workflowId: string): Promise<RunSessionAttemptLineage[]> {
+    return this.listWhere<RunSessionAttemptLineage>(
+      run_session_attempt_lineages,
+      eq(run_session_attempt_lineages.workflowId, workflowId),
+      [run_session_attempt_lineages.createdAt, run_session_attempt_lineages.runSessionId],
+    );
+  }
+
+  async saveExecutionContinuationLineage(lineage: ExecutionContinuationLineage): Promise<void> {
+    validateExecutionContinuationLineage(lineage);
+    const queuedAction = await this.getById<PlanItemWorkflowQueuedAction>(
+      plan_item_workflow_queued_actions,
+      plan_item_workflow_queued_actions.id,
+      lineage.queued_action_id,
+    );
+    if (queuedAction === undefined || queuedAction.workflow_id !== lineage.workflow_id) {
+      throw new DomainError(
+        'workflow_invalid_transition',
+        `workflow_invalid_transition: Execution continuation lineage ${lineage.id} queued action provenance is invalid`,
+      );
+    }
+    await this.upsert(execution_continuation_lineages, execution_continuation_lineages.id, lineage);
+  }
+
+  async listExecutionContinuationLineage(workflowId: string): Promise<ExecutionContinuationLineage[]> {
+    return this.listWhere<ExecutionContinuationLineage>(
+      execution_continuation_lineages,
+      eq(execution_continuation_lineages.workflowId, workflowId),
+      [execution_continuation_lineages.createdAt, execution_continuation_lineages.queuedActionId],
+    );
+  }
+
+  async findCurrentReviewPacketForWorkflow(
+    input: FindCurrentReviewPacketForWorkflowInput,
+  ): Promise<ReviewPacket | undefined> {
+    const executionPackage = await this.getExecutionPackage(input.execution_package_id);
+    const packageVersion = executionPackage?.execution_package_version ?? executionPackage?.version;
+    if (executionPackage === undefined || packageVersion !== input.execution_package_version) {
+      return undefined;
+    }
+    const conditions = [
+      eq(review_packets.workflowId, input.workflow_id),
+      eq(review_packets.executionPackageId, input.execution_package_id),
+      eq(review_packets.runSessionId, input.previous_run_session_id),
+      eq(review_packets.specRevisionId, input.approved_spec_revision_id),
+      eq(review_packets.planRevisionId, input.approved_implementation_plan_revision_id),
+      input.expected_review_packet_id === undefined ? undefined : eq(review_packets.id, input.expected_review_packet_id),
+      inArray(review_packets.status, input.allowed_statuses),
+      isNull(review_packets.supersededByReviewPacketId),
+    ].filter((condition) => condition !== undefined);
+    const rows = await this.db
+      .select()
+      .from(review_packets)
+      .where(and(...conditions))
+      .orderBy(desc(review_packets.createdAt), desc(review_packets.id));
+    return rows.map((row) => fromDbRecord<ReviewPacket>(row as Record<string, unknown>)).find((reviewPacket) => {
+      if (reviewPacket.status === 'archived') {
+        return false;
+      }
+      if (reviewPacket.status === 'completed' && !input.allowed_completed_decisions.includes(reviewPacket.decision as 'changes_requested')) {
+        return false;
+      }
+      if (
+        input.expected_review_packet_digest !== undefined &&
+        reviewPacket.current_digest !== undefined &&
+        reviewPacket.current_digest !== input.expected_review_packet_digest
+      ) {
+          return false;
+      }
+      return true;
+    });
+  }
+
   async resolveAutomationProjectSettings(
     input: ResolveAutomationProjectSettingsInput,
   ): Promise<AutomationProjectSettings> {
@@ -10421,6 +10712,9 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
   }
 
   private async codexGenerationFenceIsActive(record: CodexLaunchLeaseDbRecord, now: string): Promise<boolean> {
+    if (record.target_type === 'plan_item_workflow_action') {
+      return true;
+    }
     const actionRun = await this.getById<AutomationActionRun>(automation_action_runs, automation_action_runs.id, record.target_id);
     if (
       actionRun === undefined ||
@@ -10618,6 +10912,10 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
         set: dbRecord as never,
       });
     return record;
+  }
+
+  async getCommandIdempotency(idempotencyKey: string): Promise<CommandIdempotencyRecord | undefined> {
+    return this.commandIdempotencyByKey(idempotencyKey);
   }
 
   private async claimExecutionPackageGenerationRunUnlocked(

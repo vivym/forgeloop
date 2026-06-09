@@ -506,7 +506,11 @@ const createLaunchLease = async (
   });
   const defaultActionClaimToken = 'action-claim-token-1';
   const actionClaimTokenHash = overrides.action_claim_token_hash ?? tokenHash(defaultActionClaimToken);
-  if (target.target_kind === 'generation' && actionClaimTokenHash === tokenHash(defaultActionClaimToken)) {
+  if (
+    target.target_type === 'automation_action_run' &&
+    target.target_kind === 'generation' &&
+    actionClaimTokenHash === tokenHash(defaultActionClaimToken)
+  ) {
     try {
       await repository.getClaimedAutomationActionRun({ id: target.target_id, claim_token: defaultActionClaimToken });
     } catch {
@@ -606,7 +610,11 @@ const runtimeJobInput = async (
   });
   const defaultActionClaimToken = 'runtime-action-claim-token-1';
   const actionClaimTokenHash = overrides.action_claim_token_hash ?? tokenHash(defaultActionClaimToken);
-  if (target.target_kind === 'generation' && actionClaimTokenHash === tokenHash(defaultActionClaimToken)) {
+  if (
+    target.target_type === 'automation_action_run' &&
+    target.target_kind === 'generation' &&
+    actionClaimTokenHash === tokenHash(defaultActionClaimToken)
+  ) {
     try {
       await repository.getClaimedAutomationActionRun({ id: target.target_id, claim_token: defaultActionClaimToken });
     } catch {
@@ -748,6 +756,70 @@ const workflowRunExecutionWorkload = (
       input_memory_bundle_digest: inputMemoryDigest,
       input_environment_manifest_ref: `artifact://internal/codex_environment_manifest/codex_session/${codexSessionId}/env-1`,
       input_environment_manifest_digest: inputEnvironmentDigest,
+    },
+  };
+};
+
+const reviewResponseWorkload = (
+  overrides: {
+    runtime_job_id?: string;
+    plan_item_workflow_action_id?: string;
+    plan_item_workflow_id?: string;
+    codex_session_id?: string;
+    codex_session_turn_id?: string;
+    review_packet_id?: string;
+    review_packet_digest?: string;
+  } = {},
+): Record<string, unknown> => {
+  const codexSessionId = overrides.codex_session_id ?? 'session-1';
+  const codexSessionTurnId = overrides.codex_session_turn_id ?? 'turn-1';
+  const runtimeJobId = overrides.runtime_job_id ?? 'runtime-job-review-response-1';
+  return {
+    schema_version: 'codex_generation_workload.v1',
+    task_kind: 'review_response',
+    runtime_job_id: runtimeJobId,
+    prompt_version: 'review-response-prompt.v1',
+    output_schema_version: 'review_response.v1',
+    signed_context_ref: 'artifact://internal/review-response/context',
+    signed_context_digest: fixtureDigest('9'),
+    prompt_template_digest: fixtureDigest('8'),
+    created_at: now,
+    expires_at: expiresAt,
+    plan_item_workflow_action_id: overrides.plan_item_workflow_action_id ?? 'plan-item-workflow-action-1',
+    plan_item_workflow_id: overrides.plan_item_workflow_id ?? 'workflow-1',
+    codex_session_id: codexSessionId,
+    codex_session_turn_id: codexSessionTurnId,
+    review_packet_id: overrides.review_packet_id ?? 'review-packet-1',
+    review_packet_digest: overrides.review_packet_digest ?? fixtureDigest('7'),
+    codex_session_runtime_context: {
+      schema_version: 'codex_session_runtime_context.v1',
+      codex_session_id: codexSessionId,
+      codex_session_turn_id: codexSessionTurnId,
+      lease_id: `review-response-session-lease-${runtimeJobId}`,
+      lease_epoch: 1,
+      worker_id: 'worker-1',
+      worker_session_digest: tokenHash('session-token-1'),
+      expected_input_capsule_digest: fixtureDigest('b'),
+      turn_group_status: 'complete',
+      continuation: {
+        kind: 'resume_thread',
+        codex_thread_id: 'thread-1',
+        codex_thread_id_digest: codexCanonicalDigest({ kind: 'codex_app_server_thread_id', thread_id: 'thread-1' }),
+      },
+    },
+    codex_session_terminalization: {
+      schema_version: 'codex_session_terminalization.v1',
+      lease_token: 'review-response-lease-token-secret',
+      codex_session_id: codexSessionId,
+      codex_session_turn_id: codexSessionTurnId,
+      expected_input_capsule_digest: fixtureDigest('b'),
+      input_capsule_id: 'capsule-review-response-1',
+      input_capsule_ref: `artifact://internal/codex_runtime_capsule/codex_session/${codexSessionId}/capsule-review-response-1`,
+      input_capsule_digest: fixtureDigest('b'),
+      input_memory_bundle_ref: `artifact://internal/codex_memory_bundle/codex_session/${codexSessionId}/memory-review-response-1`,
+      input_memory_bundle_digest: fixtureDigest('c'),
+      input_environment_manifest_ref: `artifact://internal/codex_environment_manifest/codex_session/${codexSessionId}/env-review-response-1`,
+      input_environment_manifest_digest: fixtureDigest('d'),
     },
   };
 };
@@ -4024,6 +4096,99 @@ describe('codex runtime repository behavior', () => {
     expect(sealerCalls[0]?.plaintext_launch_token).toEqual(expect.any(String));
     expect(JSON.stringify(result)).not.toContain(sealerCalls[0]!.plaintext_launch_token);
     expect(result.launch_lease).not.toHaveProperty('lease_token');
+  });
+
+  it('creates and replays review response generation jobs for workflow actions without automation action runs', async () => {
+    const sealerCalls: Array<Parameters<CodexLaunchTokenEnvelopeSealer['sealLaunchTokenEnvelope']>[0]> = [];
+    const repository = createRepository(createEnvelopeSealer(sealerCalls));
+    const target = generationTarget({
+      target_type: 'plan_item_workflow_action',
+      target_id: 'plan-item-workflow-action-1',
+      target_kind: 'generation',
+    });
+    const input = await runtimeJobInput(repository, {
+      runtime_job_id: 'runtime-job-review-response-1',
+      launch_lease_id: 'runtime-launch-lease-review-response-1',
+      envelope_id: 'runtime-envelope-review-response-1',
+      job_request_id: 'runtime-job-request-review-response-1',
+      target,
+      input_json: reviewResponseWorkload({
+        runtime_job_id: 'runtime-job-review-response-1',
+        plan_item_workflow_action_id: target.target_id,
+      }),
+      input_digest: tokenHash('runtime-review-response-input-1'),
+      action_type: undefined,
+      action_attempt: undefined,
+      action_claim_token_hash: undefined,
+      precondition_fingerprint: undefined,
+      workflow_id: 'workflow-1',
+      codex_session_id: 'session-1',
+      codex_session_turn_id: 'turn-1',
+    });
+
+    const first = await repository.createOrReplayCodexRuntimeJobWithLeaseAndEnvelope(input);
+    const requestReplay = await repository.createOrReplayCodexRuntimeJobWithLeaseAndEnvelope({
+      ...input,
+      runtime_job_id: 'runtime-job-review-response-request-replay-ignored',
+    });
+    const targetReplay = await repository.createOrReplayCodexRuntimeJobWithLeaseAndEnvelope({
+      ...input,
+      runtime_job_id: 'runtime-job-review-response-target-replay-ignored',
+      job_request_id: 'runtime-job-request-review-response-target-replay',
+    });
+
+    expect(first.replayed).toBe(false);
+    expect(first.runtime_job).toMatchObject({
+      id: input.runtime_job_id,
+      target_type: 'plan_item_workflow_action',
+      target_id: target.target_id,
+      target_kind: 'generation',
+      input_json: input.input_json,
+      workflow_id: 'workflow-1',
+      codex_session_id: 'session-1',
+      codex_session_turn_id: 'turn-1',
+    });
+    expect(requestReplay).toEqual({ ...first, replayed: true });
+    expect(targetReplay).toEqual({ ...first, replayed: true });
+    expect(sealerCalls).toHaveLength(1);
+    await expect(repository.getAutomationActionRun(target.target_id)).resolves.toBeUndefined();
+  });
+
+  it('rejects review response generation jobs whose workload runtime job id does not match the persisted job', async () => {
+    const sealerCalls: Array<Parameters<CodexLaunchTokenEnvelopeSealer['sealLaunchTokenEnvelope']>[0]> = [];
+    const repository = createRepository(createEnvelopeSealer(sealerCalls));
+    const target = generationTarget({
+      target_type: 'plan_item_workflow_action',
+      target_id: 'plan-item-workflow-action-1',
+      target_kind: 'generation',
+    });
+    const input = await runtimeJobInput(repository, {
+      runtime_job_id: 'runtime-job-review-response-owner-1',
+      launch_lease_id: 'runtime-launch-lease-review-response-owner-1',
+      envelope_id: 'runtime-envelope-review-response-owner-1',
+      job_request_id: 'runtime-job-request-review-response-owner-1',
+      target,
+      input_json: reviewResponseWorkload({
+        runtime_job_id: 'runtime-job-review-response-workload-1',
+        plan_item_workflow_action_id: target.target_id,
+      }),
+      input_digest: tokenHash('runtime-review-response-owner-input-1'),
+      action_type: undefined,
+      action_attempt: undefined,
+      action_claim_token_hash: undefined,
+      precondition_fingerprint: undefined,
+      workflow_id: 'workflow-1',
+      codex_session_id: 'session-1',
+      codex_session_turn_id: 'turn-1',
+    });
+
+    await expect(repository.createOrReplayCodexRuntimeJobWithLeaseAndEnvelope(input)).rejects.toMatchObject<
+      Partial<DomainError>
+    >({
+      name: 'DomainError',
+      code: 'codex_runtime_job_unavailable',
+    });
+    expect(sealerCalls).toHaveLength(0);
   });
 
   it('replays runtime jobs by job_request_id without resealing a new launch token', async () => {

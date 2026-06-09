@@ -71,10 +71,14 @@ import type {
   ReleaseExecutionPackage,
   ReleaseWorkItem,
   ReviewPacket,
+  ReviewPacketEvidenceRef,
+  ReviewResponse,
   QaHandoff,
   RunCommand,
   RunEvent,
   RunSession,
+  RunSessionAttemptLineage,
+  ExecutionContinuationLineage,
   RunWorkerLease,
   Spec,
   SpecRevision,
@@ -302,6 +306,18 @@ export interface CreatePlanItemWorkflowWithInitialSessionInput {
   codex_session_id: string;
   development_plan_id: string;
   development_plan_item_id: string;
+  runtime_profile_id: string;
+  runtime_profile_revision_id: string;
+  credential_binding_id: string;
+  credential_binding_version_id: string;
+  actor_id: string;
+  now: string;
+}
+
+export interface ReplaceActiveCodexSessionForWorkflowInput {
+  workflow_id: string;
+  previous_session_id: string;
+  new_session_id: string;
   runtime_profile_id: string;
   runtime_profile_revision_id: string;
   credential_binding_id: string;
@@ -887,6 +903,19 @@ export type TerminalizeWorkflowExecutionResult =
       stale: true;
       stale_attempt: CodexSessionStaleTerminalizationAttempt;
     };
+
+export interface FindCurrentReviewPacketForWorkflowInput {
+  workflow_id: string;
+  execution_package_id: string;
+  execution_package_version: number;
+  previous_run_session_id: string;
+  approved_spec_revision_id: string;
+  approved_implementation_plan_revision_id: string;
+  expected_review_packet_id?: string;
+  expected_review_packet_digest?: string;
+  allowed_statuses: Array<'ready' | 'in_review' | 'completed'>;
+  allowed_completed_decisions: Array<'changes_requested'>;
+}
 
 export interface RecoverStaleCodexRuntimeJobsInput {
   stale_before: string;
@@ -1678,6 +1707,9 @@ export interface DeliveryRepository {
   savePlanItemWorkflowArtifactChangeRequest(request: PlanItemWorkflowArtifactChangeRequest): Promise<void>;
   getCodexSession(id: string): Promise<CodexSession | undefined>;
   saveCodexSession(session: CodexSession): Promise<void>;
+  replaceActiveCodexSessionForWorkflow(
+    input: ReplaceActiveCodexSessionForWorkflowInput,
+  ): Promise<{ workflow: PlanItemWorkflow; previous_session: CodexSession; session: CodexSession }>;
   createCodexSessionTurn(turn: CodexSessionTurn): Promise<void>;
   getCodexSessionTurn(id: string): Promise<CodexSessionTurn | undefined>;
   listCodexSessionTurns(sessionId: string): Promise<CodexSessionTurn[]>;
@@ -1687,6 +1719,7 @@ export interface DeliveryRepository {
   getCodexRuntimeCapsule(id: string): Promise<CodexRuntimeCapsule | undefined>;
   saveStaleCodexSessionTerminalizationAttempt(attempt: CodexSessionStaleTerminalizationAttempt): Promise<void>;
   listStaleCodexSessionTerminalizationAttempts(sessionId: string): Promise<CodexSessionStaleTerminalizationAttempt[]>;
+  getCodexSessionLease(id: string): Promise<CodexSessionLease | undefined>;
   claimCodexSessionLease(input: ClaimCodexSessionLeaseInput): Promise<{ session: CodexSession; lease: CodexSessionLease }>;
   recoverCodexSessionLeaseForClaim(
     input: RecoverCodexSessionLeaseForClaimInput,
@@ -1962,6 +1995,16 @@ export interface DeliveryRepository {
   listReviewPackets(projectId?: string): Promise<ReviewPacket[]>;
   listReviewPacketsForPackage(executionPackageId: string): Promise<ReviewPacket[]>;
   findOpenReviewPacketForPackage(executionPackageId: string): Promise<ReviewPacket | undefined>;
+  saveReviewPacketEvidenceRef(ref: ReviewPacketEvidenceRef): Promise<void>;
+  listReviewPacketEvidenceRefs(reviewPacketId: string): Promise<ReviewPacketEvidenceRef[]>;
+  saveReviewResponse(response: ReviewResponse): Promise<void>;
+  getReviewResponse(id: string): Promise<ReviewResponse | undefined>;
+  getLatestReviewResponseForWorkflow(workflowId: string): Promise<ReviewResponse | undefined>;
+  saveRunSessionAttemptLineage(lineage: RunSessionAttemptLineage): Promise<void>;
+  listRunSessionAttemptLineage(workflowId: string): Promise<RunSessionAttemptLineage[]>;
+  saveExecutionContinuationLineage(lineage: ExecutionContinuationLineage): Promise<void>;
+  listExecutionContinuationLineage(workflowId: string): Promise<ExecutionContinuationLineage[]>;
+  findCurrentReviewPacketForWorkflow(input: FindCurrentReviewPacketForWorkflowInput): Promise<ReviewPacket | undefined>;
 
   resolveAutomationProjectSettings(input: ResolveAutomationProjectSettingsInput): Promise<AutomationProjectSettings>;
   setAutomationProjectSettings(input: SetAutomationProjectSettingsInput): Promise<AutomationProjectSettings>;
@@ -1970,6 +2013,7 @@ export interface DeliveryRepository {
   listActiveManualPathHolds(input: ListActiveManualPathHoldsInput): Promise<ManualPathHold[]>;
   requestManualPathHold(input: RequestManualPathHoldInput): Promise<ManualPathHold>;
   resolveManualPathHold(input: ResolveManualPathHoldInput): Promise<ManualPathHold>;
+  getCommandIdempotency(idempotencyKey: string): Promise<CommandIdempotencyRecord | undefined>;
   claimCommandIdempotency(input: ClaimCommandIdempotencyInput): Promise<CommandIdempotencyRecord>;
   renewCommandIdempotency(input: RenewCommandIdempotencyInput): Promise<CommandIdempotencyRecord>;
   completeCommandIdempotency(input: FinishCommandIdempotencyInput): Promise<CommandIdempotencyRecord>;

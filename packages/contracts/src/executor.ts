@@ -194,17 +194,46 @@ export const checkResultSchema = z
   });
 export type CheckResult = z.infer<typeof checkResultSchema>;
 
-const requestedChangeContextSchema = z.object({
-  title: z.string().min(1),
-  description: z.string().min(1),
-  file_path: z.string().min(1).optional(),
-  severity: z.enum(['minor', 'major', 'critical']).optional(),
-  suggested_validation: z.string().min(1).optional(),
-});
+const requestedChangeContextSchema = z
+  .object({
+    title: z.string().min(1),
+    description: z.string().min(1),
+    file_path: z.string().min(1).optional(),
+    severity: z.enum(['minor', 'major', 'critical']).optional(),
+    suggested_validation: z.string().min(1).optional(),
+  })
+  .strict();
+
+const reviewPacketEvidenceRefSchema = z
+  .object({
+    id: z.string().min(1),
+    ref_kind: z.enum([
+      'github_comment_url',
+      'github_thread_url',
+      'markdown_excerpt',
+      'image_attachment',
+      'internal_artifact',
+      'check_log_summary',
+    ]),
+    display_text: z.string().min(1),
+    digest: z.string().min(1),
+  })
+  .strict();
 
 const reviewContextSchema = z
   .object({
     latest_decision: z.enum(['none', 'approved', 'changes_requested']).optional(),
+    review_packet_id: z.string().min(1).optional(),
+    review_packet_digest: z.string().min(1).optional(),
+    previous_run_session_id: z.string().min(1).optional(),
+    approved_spec_revision_id: z.string().min(1).optional(),
+    approved_implementation_plan_revision_id: z.string().min(1).optional(),
+    execution_package_id: z.string().min(1).optional(),
+    execution_package_version: z.number().int().nonnegative().optional(),
+    path_policy_digest: z.string().min(1).optional(),
+    required_checks: z.array(requiredCheckSpecSchema).optional(),
+    evidence_refs: z.array(reviewPacketEvidenceRefSchema).optional(),
+    review_response_ids: z.array(z.string().min(1)).optional(),
     requested_changes: z.array(requestedChangeContextSchema).default([]),
   })
   .superRefine((reviewContext, ctx) => {
@@ -216,6 +245,33 @@ const reviewContextSchema = z
       });
     }
 
+    if (reviewContext.latest_decision === 'changes_requested') {
+      const requiredFields: Array<keyof typeof reviewContext> = [
+        'review_packet_id',
+        'review_packet_digest',
+        'previous_run_session_id',
+        'approved_spec_revision_id',
+        'approved_implementation_plan_revision_id',
+        'execution_package_id',
+        'execution_package_version',
+        'path_policy_digest',
+        'required_checks',
+        'evidence_refs',
+        'review_response_ids',
+      ];
+      for (const field of requiredFields) {
+        const value = reviewContext[field];
+        const missingArray = field === 'required_checks' && Array.isArray(value) && value.length === 0;
+        if (value === undefined || missingArray) {
+          ctx.addIssue({
+            code: 'custom',
+            path: [field],
+            message: `changes_requested review context requires ${field}`,
+          });
+        }
+      }
+    }
+
     if (reviewContext.latest_decision !== 'changes_requested' && reviewContext.requested_changes.length > 0) {
       ctx.addIssue({
         code: 'custom',
@@ -223,7 +279,8 @@ const reviewContextSchema = z
         message: 'requested_changes are only allowed when latest_decision is changes_requested',
       });
     }
-  });
+  })
+  .strict();
 
 export const runSpecSchema = z
   .object({

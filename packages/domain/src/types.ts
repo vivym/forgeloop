@@ -29,6 +29,13 @@ import {
 } from '@forgeloop/contracts';
 import type { PackageRuntimePolicySnapshot, SourceMutationPolicy, ValidationStrategy } from './automation.js';
 
+export type {
+  ExecutionContinuationLineage,
+  ReviewPacketEvidenceRef,
+  ReviewResponse,
+  RunSessionAttemptLineage,
+} from './plan-item-workflow.js';
+
 export type DomainErrorCode =
   | 'INVALID_TRANSITION'
   | 'REPO_NOT_BOUND'
@@ -67,6 +74,8 @@ export type DomainErrorCode =
   | 'workflow_active_session_conflict'
   | 'workflow_execution_already_running'
   | 'workflow_execution_recovery_required'
+  | 'workflow_execution_not_ready_for_input'
+  | 'workflow_execution_writer_still_active'
   | 'codex_session_lease_conflict'
   | 'codex_session_lease_expired'
   | 'codex_session_stale_terminalization'
@@ -94,6 +103,11 @@ export type DomainErrorCode =
   | 'workflow_action_not_runnable'
   | 'workflow_action_not_active_session'
   | 'workflow_execution_readiness_blocked'
+  | 'workflow_review_packet_not_current'
+  | 'workflow_review_packet_digest_mismatch'
+  | 'workflow_review_packet_evidence_unsafe'
+  | 'workflow_execution_cancel_pending'
+  | 'workflow_abandon_next_action_mismatch'
   | 'workflow_capsule_digest_mismatch'
   | 'workflow_context_digest_mismatch';
 
@@ -561,6 +575,8 @@ export interface ReviewPacket {
   plan_revision_id: string;
   status: ReviewPacketStatus;
   decision: ReviewPacketDecision;
+  superseded_by_review_packet_id?: string;
+  current_digest?: string;
   summary?: string;
   changed_files: ChangedFile[];
   check_result_summary: string;

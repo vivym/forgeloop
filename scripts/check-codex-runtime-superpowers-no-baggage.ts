@@ -14,6 +14,11 @@ export type CodexRuntimeSuperpowersBaggagePattern =
   | 'legacy_workflow_run_session_control'
   | 'wave5_forbidden_session_mutation'
   | 'workflow_composer_generation_action'
+  | 'wave7_direct_run_session_control'
+  | 'wave7_workflow_execution_package_rerun'
+  | 'wave7_public_fork_before_wave8'
+  | 'wave7_review_response_automation_action_run'
+  | 'wave7_public_raw_runtime_ref'
   | 'public_owner_actor_alias'
   | 'execution_package_start_root_label'
   | 'legacy_inline_workspace_bundle_bytes'
@@ -74,6 +79,7 @@ const defaultScanFiles = [
   'packages/run-worker/src/run-worker.ts',
   'tests/smoke/codex-runtime-no-baggage-gate.test.ts',
   'tests/smoke/codex-runtime-superpowers-dogfood-script.test.ts',
+  'tests/smoke/plan-item-execution-continuation-review-fix-loop-dogfood-script.test.ts',
 ];
 const defaultScanRoots = [
   'scripts',
@@ -148,6 +154,16 @@ const planItemExecutionStartPublicFiles = new Set([
   'apps/control-plane-api/src/modules/plan-item-workflows/plan-item-workflow.controller.ts',
   'apps/web/src/features/development-plans/plan-item-workflow-workspace.tsx',
   'apps/web/src/shared/api/commands.ts',
+]);
+const wave7WorkflowProductPublicFiles = new Set([
+  'apps/control-plane-api/src/modules/plan-item-workflows/plan-item-workflow.controller.ts',
+  'apps/control-plane-api/src/modules/plan-item-workflows/plan-item-workflow.dto.ts',
+  'packages/contracts/src/plan-item-workflow.ts',
+  'apps/web/src/features/development-plans/plan-item-workflow-view-model.ts',
+  'apps/web/src/features/development-plans/plan-item-workflow-workspace.tsx',
+  'apps/web/src/shared/api/commands.ts',
+  'apps/web/src/shared/api/hooks.ts',
+  'apps/web/src/shared/api/types.ts',
 ]);
 
 export const codexRuntimeSuperpowersNoBaggageAllowlist: AllowedMatch[] = [
@@ -387,6 +403,36 @@ export const codexRuntimeSuperpowersNoBaggageAllowlist: AllowedMatch[] = [
     reason: 'Negative test fixture proves the strict gate catches raw runtime refs on public UI surfaces.',
   },
   {
+    file: 'tests/smoke/codex-runtime-no-baggage-gate.test.ts',
+    pattern: 'wave7_direct_run_session_control',
+    owner: 'negative-test',
+    reason: 'Negative test fixture proves the strict gate catches Wave 7 direct run-session controls.',
+  },
+  {
+    file: 'tests/smoke/codex-runtime-no-baggage-gate.test.ts',
+    pattern: 'wave7_workflow_execution_package_rerun',
+    owner: 'negative-test',
+    reason: 'Negative test fixture proves the strict gate catches Wave 7 package rerun exposure.',
+  },
+  {
+    file: 'tests/smoke/codex-runtime-no-baggage-gate.test.ts',
+    pattern: 'wave7_public_fork_before_wave8',
+    owner: 'negative-test',
+    reason: 'Negative test fixture proves the strict gate catches fork or select-fork before Wave 8.',
+  },
+  {
+    file: 'tests/smoke/codex-runtime-no-baggage-gate.test.ts',
+    pattern: 'wave7_review_response_automation_action_run',
+    owner: 'negative-test',
+    reason: 'Negative test fixture proves the strict gate catches review response automation action run coupling.',
+  },
+  {
+    file: 'tests/smoke/codex-runtime-no-baggage-gate.test.ts',
+    pattern: 'wave7_public_raw_runtime_ref',
+    owner: 'negative-test',
+    reason: 'Negative test fixture proves the strict gate catches Wave 7 raw runtime refs on public surfaces.',
+  },
+  {
     file: 'tests/smoke/codex-runtime-superpowers-dogfood-script.test.ts',
     pattern: 'host_codex_home',
     owner: 'negative-test',
@@ -456,6 +502,36 @@ export const codexRuntimeSuperpowersNoBaggageAllowlist: AllowedMatch[] = [
     reason: 'The guard must name the retired inline workspace bundle byte field it scans for.',
   },
   {
+    file: 'scripts/check-codex-runtime-superpowers-no-baggage.ts',
+    pattern: 'wave7_direct_run_session_control',
+    owner: 'internal-runtime-storage',
+    reason: 'The guard must name the forbidden Wave 7 direct run-session control patterns it scans for.',
+  },
+  {
+    file: 'scripts/check-codex-runtime-superpowers-no-baggage.ts',
+    pattern: 'wave7_workflow_execution_package_rerun',
+    owner: 'internal-runtime-storage',
+    reason: 'The guard must name the forbidden Wave 7 execution package rerun pattern it scans for.',
+  },
+  {
+    file: 'scripts/check-codex-runtime-superpowers-no-baggage.ts',
+    pattern: 'wave7_public_fork_before_wave8',
+    owner: 'internal-runtime-storage',
+    reason: 'The guard must name the forbidden Wave 7 public fork patterns it scans for.',
+  },
+  {
+    file: 'scripts/check-codex-runtime-superpowers-no-baggage.ts',
+    pattern: 'wave7_review_response_automation_action_run',
+    owner: 'internal-runtime-storage',
+    reason: 'The guard must name the forbidden review response automation action run token it scans for.',
+  },
+  {
+    file: 'scripts/check-codex-runtime-superpowers-no-baggage.ts',
+    pattern: 'wave7_public_raw_runtime_ref',
+    owner: 'internal-runtime-storage',
+    reason: 'The guard must name the forbidden Wave 7 raw runtime ref tokens it scans for.',
+  },
+  {
     file: 'scripts/codex-runtime-superpowers-dogfood.ts',
     pattern: 'host_codex_home',
     owner: 'internal-runtime-storage',
@@ -522,6 +598,36 @@ const baggagePatterns: Record<CodexRuntimeSuperpowersBaggagePattern, RegExp[]> =
     /\baction:\s*['"](?:generate_spec_doc|generate_implementation_plan_doc|start_execution)['"]/,
     /<option\s+value=["'](?:generate_spec_doc|generate_implementation_plan_doc|start_execution)["']/,
     /\bWorkflowMessageAction\b.*\b(?:generate_spec_doc|generate_implementation_plan_doc|start_execution)\b/,
+  ],
+  wave7_direct_run_session_control: [
+    /\/?plan-item-workflows\/[^"'`\s]+\/run-sessions\/[^"'`\s]+\/(?:input|cancel|resume|retry|rerun)(?:\/|\b)/,
+    /\bworkflowRunSession(?:Input|Cancel|Resume|Retry|Rerun)\b/,
+  ],
+  wave7_workflow_execution_package_rerun: [
+    /\/?plan-item-workflows\/[^"'`\s]+\/execution-packages\/[^"'`\s]+\/(?:rerun|force-rerun)(?:\/|\b)/,
+    /\bworkflowOwnedExecutionPackage(?:Rerun|ForceRerun)\b/,
+  ],
+  wave7_public_fork_before_wave8: [
+    /\/?plan-item-workflows\/[^"'`\s]+\/(?:fork|select-fork|select-active-fork)(?:\/|\b)/,
+    /\/?plan-item-workflows\/[^"'`\s]+\/codex-sessions\/[^"'`\s]+\/(?:fork|select-active-fork)(?:\/|\b)/,
+  ],
+  wave7_review_response_automation_action_run: [
+    /\bautomation_action_run\b/,
+    /\baction_run_id\b/,
+  ],
+  wave7_public_raw_runtime_ref: [
+    /\bcodex_thread_id\b(?!_digest)/,
+    /\b(?:active_)?codex_session_id\b/,
+    /\bcodex_session_turn_id\b/,
+    /\b(?:input_|output_|latest_)?capsule_id\b/,
+    /\b(?:input_|output_|latest_)?(?:memory_bundle|environment_manifest)_ref\b/,
+    /\binternal_object_ref\b/,
+    /\b(?:lease_token|lease_token_hash|launch_lease_id)\b/,
+    /\bworker_id\b/,
+    /\bcredential_binding(?:_version)?_id\b/,
+    /\bruntime_profile(?:_revision)?_id\b/,
+    /artifact:\/\//,
+    /\/Users\//,
   ],
   public_owner_actor_alias: [
     /\bowner_actor_id\b/,
@@ -611,14 +717,22 @@ const isIgnoredHistoricalPath = (
       'wave5_forbidden_session_mutation',
       'workflow_composer_generation_action',
       'public_raw_codex_runtime_ref',
-    ].includes(pattern) && !wave5WorkflowProductFiles.has(file);
+  ].includes(pattern) && !wave5WorkflowProductFiles.has(file);
+  const isWave7ProductPatternOutsideWave7Files =
+    [
+      'wave7_direct_run_session_control',
+      'wave7_workflow_execution_package_rerun',
+      'wave7_public_fork_before_wave8',
+      'wave7_review_response_automation_action_run',
+      'wave7_public_raw_runtime_ref',
+    ].includes(pattern) && !wave7WorkflowProductPublicFiles.has(file);
   const isHistoricalSupportPath =
     pattern !== 'legacy_codex_session_snapshot' &&
     (ignoredHistoricalPathFragments.some((fragment) => file === fragment || file.includes(fragment)) ||
       (file.startsWith('scripts/') && !activeStrictScripts.has(file)) ||
       (file.startsWith('tests/') && !activeTask8Tests.has(file)) ||
       (file.startsWith('docs/superpowers/reports/') && !file.includes('codex-runtime-superpowers')));
-  return isWave5ProductPatternOutsideWave5Files || isHistoricalSupportPath;
+  return isWave5ProductPatternOutsideWave5Files || isWave7ProductPatternOutsideWave7Files || isHistoricalSupportPath;
 };
 
 const collectFilesUnder = (rootDir: string, relativePath: string): string[] => {
@@ -715,6 +829,9 @@ const isAllowed = (input: {
   (input.pattern === 'public_raw_codex_runtime_ref' &&
     input.file === 'apps/web/src/shared/api/types.ts' &&
     input.line.includes("from '@forgeloop/contracts'")) ||
+  (input.pattern === 'wave7_public_raw_runtime_ref' &&
+    input.file === 'apps/web/src/features/development-plans/plan-item-workflow-view-model.ts' &&
+    isPlanItemWorkflowUiRuntimeSafetyAssertionLine(input.line)) ||
   (input.pattern === 'legacy_codex_session_snapshot' &&
     input.file.split('/').slice(0, 3).join(':') === 'docs:superpowers:specs' &&
     /supersedes|superseded|legacy|old|prior|previous/.test(input.line)) ||
@@ -726,7 +843,7 @@ const isAllowed = (input: {
   );
 
 const isPlanItemWorkflowUiRuntimeSafetyAssertionLine = (line: string): boolean =>
-  /^\s*['"](?:active_codex_session_id|codex_session_id|codex_session_turn_id|output_capsule_id|memory_bundle_ref|prompt_transcript)['"],?\s*$/.test(line) ||
+  /^\s*['"](?:active_codex_session_id|codex_session_id|codex_session_turn_id|output_capsule_id|input_capsule_id|latest_capsule_id|base_memory_bundle_ref|latest_memory_bundle_ref|input_memory_bundle_ref|output_memory_bundle_ref|memory_bundle_ref|memory_refs|input_environment_manifest_ref|internal_object_ref|output_environment_manifest_ref|latest_environment_manifest_ref|prompt_transcript|prompt_transcript_ref|local_path|local_artifact_path|execution_package_id|internal_execution_package_id|lease_token|lease_token_hash|worker_id|credential_binding_id|credential_binding_version_id|runtime_profile_id|runtime_profile_revision_id)['"],?\s*$/.test(line) ||
   /^\s*const forbiddenKeyPatterns = \[\/codex_thread_id\$\/i, \/capsule_ref\$\/i, \/artifact_ref\$\/i, \/credential\.\*metadata\/i\];\s*$/.test(line) ||
   /^\s*const forbiddenValuePatterns = \[\/artifact:/.test(line);
 
@@ -762,9 +879,29 @@ const scanFile = (input: {
       baggagePatterns.legacy_public_execution_start_root.some((expression) => expression.test(line)) &&
       !baggagePatterns.legacy_public_execution_package_start.some((expression) => expression.test(line));
     for (const [pattern, expressions] of patternsForFile(input.file)) {
+      const coveredByExistingWorkflowRunSessionControl =
+        pattern === 'wave7_direct_run_session_control' &&
+        baggagePatterns.legacy_workflow_run_session_control.some((expression) => expression.test(line));
+      const coveredByExistingWorkflowForkControl =
+        pattern === 'wave7_public_fork_before_wave8' &&
+        baggagePatterns.wave5_forbidden_session_mutation.some((expression) => expression.test(line));
+      const coveredByExistingExecutionPackageControl =
+        pattern === 'wave7_workflow_execution_package_rerun' &&
+        baggagePatterns.legacy_public_execution_package_start.some((expression) => expression.test(line));
+      const coveredByExistingRawRuntimeRef =
+        pattern === 'wave7_public_raw_runtime_ref' &&
+        baggagePatterns.public_raw_codex_runtime_ref.some((expression) => expression.test(line));
       if (
         shouldUseStartRootPattern &&
         (pattern === 'legacy_work_items_route' || pattern === 'raw_runtime_route')
+      ) {
+        continue;
+      }
+      if (
+        coveredByExistingWorkflowRunSessionControl ||
+        coveredByExistingWorkflowForkControl ||
+        coveredByExistingExecutionPackageControl ||
+        coveredByExistingRawRuntimeRef
       ) {
         continue;
       }

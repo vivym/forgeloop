@@ -198,7 +198,7 @@ export interface CodexWorkerRegistration {
 }
 
 export interface CodexLaunchTarget {
-  target_type: 'automation_action_run' | 'run_session';
+  target_type: 'automation_action_run' | 'run_session' | 'plan_item_workflow_action';
   target_id: string;
   target_kind: CodexRuntimeTargetKind;
   project_id: string;
@@ -325,6 +325,7 @@ export const codexGenerationTaskKinds = [
   'boundary_brainstorming_round',
   'development_plan_item_spec_revision',
   'development_plan_item_execution_plan_revision',
+  'review_response',
 ] as const;
 
 export type CodexGenerationTaskKind = (typeof codexGenerationTaskKinds)[number];
@@ -344,11 +345,9 @@ export type CodexLaunchTokenEnvelopeDigestInput = Pick<
   | 'expires_at'
 >;
 
-export interface CodexGenerationWorkloadV1 {
+interface CodexGenerationWorkloadBaseV1 {
   schema_version: 'codex_generation_workload.v1';
   runtime_job_id: string;
-  action_run_id: string;
-  plan_item_workflow_action_id?: string;
   task_kind: CodexGenerationTaskKind;
   prompt_version: string;
   output_schema_version: string;
@@ -360,6 +359,33 @@ export interface CodexGenerationWorkloadV1 {
   codex_session_runtime_context?: CodexSessionRuntimeContextV1;
   codex_session_terminalization?: CodexSessionTerminalizationV1;
 }
+
+export type CodexAutomationGenerationWorkloadV1 = CodexGenerationWorkloadBaseV1 & {
+  action_run_id: string;
+  plan_item_workflow_action_id?: never;
+  plan_item_workflow_id?: never;
+  codex_session_id?: never;
+  codex_session_turn_id?: never;
+  review_packet_id?: never;
+  review_packet_digest?: never;
+  task_kind: Exclude<CodexGenerationTaskKind, 'review_response'>;
+};
+
+export type CodexPlanItemWorkflowActionGenerationWorkloadV1 = CodexGenerationWorkloadBaseV1 & {
+  action_run_id?: never;
+  plan_item_workflow_action_id: string;
+  plan_item_workflow_id: string;
+  codex_session_id: string;
+  codex_session_turn_id: string;
+  review_packet_id: string;
+  review_packet_digest: string;
+  task_kind: 'review_response';
+  output_schema_version: 'review_response.v1';
+};
+
+export type CodexGenerationWorkloadV1 =
+  | CodexAutomationGenerationWorkloadV1
+  | CodexPlanItemWorkflowActionGenerationWorkloadV1;
 
 export type CodexThreadContinuationV1 =
   | { kind: 'start_thread' }
@@ -398,6 +424,28 @@ const codexSessionRuntimeContextKeys = new Set([
   'continuation',
 ]);
 
+const codexGenerationWorkloadKeys = new Set([
+  'schema_version',
+  'runtime_job_id',
+  'action_run_id',
+  'plan_item_workflow_action_id',
+  'plan_item_workflow_id',
+  'codex_session_id',
+  'codex_session_turn_id',
+  'review_packet_id',
+  'review_packet_digest',
+  'task_kind',
+  'prompt_version',
+  'output_schema_version',
+  'signed_context_ref',
+  'signed_context_digest',
+  'prompt_template_digest',
+  'created_at',
+  'expires_at',
+  'codex_session_runtime_context',
+  'codex_session_terminalization',
+]);
+
 const codexRunExecutionWorkloadKeys = new Set([
   'schema_version',
   'runtime_job_id',
@@ -415,6 +463,10 @@ const codexRunExecutionWorkloadKeys = new Set([
   'execution_context_digest',
   'path_policy_digest',
   'required_checks_digest',
+  'previous_run_session_id',
+  'previous_review_packet_id',
+  'review_packet_digest',
+  'signed_context_json',
   'output_schema_version',
   'created_at',
   'expires_at',
@@ -507,6 +559,10 @@ export interface CodexRunExecutionWorkloadV1 {
   execution_context_digest: string;
   path_policy_digest: string;
   required_checks_digest?: string;
+  previous_run_session_id?: string;
+  previous_review_packet_id?: string;
+  review_packet_digest?: string;
+  signed_context_json?: Record<string, unknown>;
   output_schema_version: string;
   created_at: string;
   expires_at: string;
@@ -1017,6 +1073,163 @@ const requireRunExecutionWorkloadDigest = (input: Record<string, unknown>, field
   return value;
 };
 
+const requireRunExecutionWorkloadPlainObject = (input: Record<string, unknown>, field: string): Record<string, unknown> => {
+  const value = input[field];
+  if (!isPlainObject(value)) {
+    throw unsupportedGenerationWorkload(`codex_generation_workload_unsupported: ${field} must be an object.`);
+  }
+  return value;
+};
+
+const validateCodexSessionTerminalization = (value: unknown): CodexSessionTerminalizationV1 => {
+  if (!isPlainObject(value) || value.schema_version !== 'codex_session_terminalization.v1') {
+    throw unsupportedGenerationWorkload('codex_generation_workload_unsupported: session terminalization is unsupported.');
+  }
+  assertRunExecutionWorkloadKeys(value, codexSessionTerminalizationKeys, 'codex_session_terminalization');
+  if (
+    value.codex_session_lease_epoch !== undefined &&
+    (typeof value.codex_session_lease_epoch !== 'number' ||
+      !Number.isInteger(value.codex_session_lease_epoch) ||
+      value.codex_session_lease_epoch <= 0)
+  ) {
+    throw unsupportedGenerationWorkload('codex_generation_workload_unsupported: codex_session_lease_epoch must be a positive integer.');
+  }
+  return {
+    schema_version: 'codex_session_terminalization.v1',
+    lease_token: requireRunExecutionWorkloadString(value, 'lease_token'),
+    ...(value.codex_session_lease_id === undefined
+      ? {}
+      : { codex_session_lease_id: requireRunExecutionWorkloadString(value, 'codex_session_lease_id') }),
+    ...(value.codex_session_lease_epoch === undefined
+      ? {}
+      : { codex_session_lease_epoch: Number(value.codex_session_lease_epoch) }),
+    ...(value.codex_session_worker_id === undefined
+      ? {}
+      : { codex_session_worker_id: requireRunExecutionWorkloadString(value, 'codex_session_worker_id') }),
+    ...(value.codex_session_worker_session_digest === undefined
+      ? {}
+      : { codex_session_worker_session_digest: requireRunExecutionWorkloadDigest(value, 'codex_session_worker_session_digest') }),
+    codex_session_id: requireRunExecutionWorkloadString(value, 'codex_session_id'),
+    codex_session_turn_id: requireRunExecutionWorkloadString(value, 'codex_session_turn_id'),
+    ...(value.expected_input_capsule_digest === undefined
+      ? {}
+      : { expected_input_capsule_digest: requireRunExecutionWorkloadDigest(value, 'expected_input_capsule_digest') }),
+    ...(value.input_capsule_id === undefined
+      ? {}
+      : { input_capsule_id: requireRunExecutionWorkloadString(value, 'input_capsule_id') }),
+    ...(value.input_capsule_digest === undefined
+      ? {}
+      : { input_capsule_digest: requireRunExecutionWorkloadDigest(value, 'input_capsule_digest') }),
+    ...(value.input_capsule_ref === undefined
+      ? {}
+      : { input_capsule_ref: requireRunExecutionWorkloadString(value, 'input_capsule_ref') }),
+    ...(value.base_memory_bundle_ref === undefined
+      ? {}
+      : { base_memory_bundle_ref: requireRunExecutionWorkloadString(value, 'base_memory_bundle_ref') }),
+    ...(value.base_memory_bundle_digest === undefined
+      ? {}
+      : { base_memory_bundle_digest: requireRunExecutionWorkloadDigest(value, 'base_memory_bundle_digest') }),
+    ...(value.input_memory_bundle_ref === undefined
+      ? {}
+      : { input_memory_bundle_ref: requireRunExecutionWorkloadString(value, 'input_memory_bundle_ref') }),
+    ...(value.input_memory_bundle_digest === undefined
+      ? {}
+      : { input_memory_bundle_digest: requireRunExecutionWorkloadDigest(value, 'input_memory_bundle_digest') }),
+    ...(value.input_environment_manifest_ref === undefined
+      ? {}
+      : { input_environment_manifest_ref: requireRunExecutionWorkloadString(value, 'input_environment_manifest_ref') }),
+    ...(value.input_environment_manifest_digest === undefined
+      ? {}
+      : { input_environment_manifest_digest: requireRunExecutionWorkloadDigest(value, 'input_environment_manifest_digest') }),
+  };
+};
+
+export const validateCodexGenerationWorkload = (value: unknown): CodexGenerationWorkloadV1 => {
+  if (!isPlainObject(value) || value.schema_version !== 'codex_generation_workload.v1') {
+    throw unsupportedGenerationWorkload('codex_generation_workload_unsupported: generation workload is unsupported.');
+  }
+  assertRunExecutionWorkloadKeys(value, codexGenerationWorkloadKeys, 'generation workload');
+
+  const taskKind = requireRunExecutionWorkloadString(value, 'task_kind');
+  if (!codexGenerationTaskKindSet.has(taskKind)) {
+    throw unsupportedGenerationWorkload('codex_generation_workload_unsupported: task_kind is unsupported.');
+  }
+
+  const base = {
+    schema_version: 'codex_generation_workload.v1' as const,
+    runtime_job_id: requireRunExecutionWorkloadString(value, 'runtime_job_id'),
+    prompt_version: requireRunExecutionWorkloadString(value, 'prompt_version'),
+    output_schema_version: requireRunExecutionWorkloadString(value, 'output_schema_version'),
+    signed_context_ref: requireRunExecutionWorkloadString(value, 'signed_context_ref'),
+    signed_context_digest: requireRunExecutionWorkloadDigest(value, 'signed_context_digest'),
+    prompt_template_digest: requireRunExecutionWorkloadDigest(value, 'prompt_template_digest'),
+    created_at: requireRunExecutionWorkloadString(value, 'created_at'),
+    expires_at: requireRunExecutionWorkloadString(value, 'expires_at'),
+    ...(value.codex_session_runtime_context === undefined
+      ? {}
+      : { codex_session_runtime_context: validateCodexSessionRuntimeContext(value.codex_session_runtime_context) }),
+    ...(value.codex_session_terminalization === undefined
+      ? {}
+      : { codex_session_terminalization: validateCodexSessionTerminalization(value.codex_session_terminalization) }),
+  };
+
+  if (taskKind === 'review_response') {
+    if (value.action_run_id !== undefined) {
+      throw unsupportedGenerationWorkload('codex_generation_workload_unsupported: review_response forbids action_run_id.');
+    }
+    if (value.output_schema_version !== 'review_response.v1') {
+      throw unsupportedGenerationWorkload('codex_generation_workload_unsupported: review_response output_schema_version is unsupported.');
+    }
+    if (base.codex_session_runtime_context === undefined || base.codex_session_terminalization === undefined) {
+      throw unsupportedGenerationWorkload(
+        'codex_generation_workload_unsupported: review_response requires codex session runtime context and terminalization.',
+      );
+    }
+    const codexSessionId = requireRunExecutionWorkloadString(value, 'codex_session_id');
+    const codexSessionTurnId = requireRunExecutionWorkloadString(value, 'codex_session_turn_id');
+    assertRunExecutionContinuityMatches(base.codex_session_runtime_context.codex_session_id, codexSessionId, 'codex_session_id');
+    assertRunExecutionContinuityMatches(
+      base.codex_session_runtime_context.codex_session_turn_id,
+      codexSessionTurnId,
+      'codex_session_turn_id',
+    );
+    assertRunExecutionContinuityMatches(base.codex_session_terminalization.codex_session_id, codexSessionId, 'codex_session_id');
+    assertRunExecutionContinuityMatches(
+      base.codex_session_terminalization.codex_session_turn_id,
+      codexSessionTurnId,
+      'codex_session_turn_id',
+    );
+    return {
+      ...base,
+      task_kind: 'review_response',
+      output_schema_version: 'review_response.v1',
+      plan_item_workflow_action_id: requireRunExecutionWorkloadString(value, 'plan_item_workflow_action_id'),
+      plan_item_workflow_id: requireRunExecutionWorkloadString(value, 'plan_item_workflow_id'),
+      codex_session_id: codexSessionId,
+      codex_session_turn_id: codexSessionTurnId,
+      review_packet_id: requireRunExecutionWorkloadString(value, 'review_packet_id'),
+      review_packet_digest: requireRunExecutionWorkloadDigest(value, 'review_packet_digest'),
+    };
+  }
+
+  if (
+    value.plan_item_workflow_action_id !== undefined ||
+    value.plan_item_workflow_id !== undefined ||
+    value.codex_session_id !== undefined ||
+    value.codex_session_turn_id !== undefined ||
+    value.review_packet_id !== undefined ||
+    value.review_packet_digest !== undefined
+  ) {
+    throw unsupportedGenerationWorkload('codex_generation_workload_unsupported: automation generation forbids workflow action fields.');
+  }
+
+  return {
+    ...base,
+    task_kind: taskKind as Exclude<CodexGenerationTaskKind, 'review_response'>,
+    action_run_id: requireRunExecutionWorkloadString(value, 'action_run_id'),
+  };
+};
+
 const requireRunExecutionWorkloadInteger = (input: Record<string, unknown>, field: string): number => {
   const value = input[field];
   if (typeof value !== 'number' || !Number.isInteger(value) || value < 0) {
@@ -1158,6 +1371,18 @@ export const validateCodexRunExecutionWorkload = (value: unknown): CodexWorkflow
   const workspaceAcquisition = requireRunExecutionWorkspaceAcquisition(value.workspace_acquisition_json);
   assertRunExecutionContinuityMatches(workspaceAcquisition.bundle_id, workspaceBundleId, 'workspace_bundle_id');
   assertRunExecutionContinuityMatches(workspaceAcquisition.archive_digest, workspaceBundleDigest, 'workspace_bundle_digest');
+  const hasFixLoopPreviousRunSessionId = value.previous_run_session_id !== undefined;
+  const hasFixLoopPreviousReviewPacketId = value.previous_review_packet_id !== undefined;
+  const hasFixLoopReviewPacketDigest = value.review_packet_digest !== undefined;
+  const hasAnyFixLoopField =
+    hasFixLoopPreviousRunSessionId || hasFixLoopPreviousReviewPacketId || hasFixLoopReviewPacketDigest;
+  const hasAllFixLoopFields =
+    hasFixLoopPreviousRunSessionId && hasFixLoopPreviousReviewPacketId && hasFixLoopReviewPacketDigest;
+  if (hasAnyFixLoopField && !hasAllFixLoopFields) {
+    throw unsupportedGenerationWorkload(
+      'codex_generation_workload_unsupported: fix-loop lineage requires previous_run_session_id, previous_review_packet_id, and review_packet_digest together.',
+    );
+  }
 
   return {
     schema_version: 'codex_run_execution_workload.v1',
@@ -1178,6 +1403,16 @@ export const validateCodexRunExecutionWorkload = (value: unknown): CodexWorkflow
     ...(value.required_checks_digest === undefined
       ? {}
       : { required_checks_digest: requireRunExecutionWorkloadDigest(value, 'required_checks_digest') }),
+    ...(hasAllFixLoopFields
+      ? {
+          previous_run_session_id: requireRunExecutionWorkloadString(value, 'previous_run_session_id'),
+          previous_review_packet_id: requireRunExecutionWorkloadString(value, 'previous_review_packet_id'),
+          review_packet_digest: requireRunExecutionWorkloadDigest(value, 'review_packet_digest'),
+        }
+      : {}),
+    ...(value.signed_context_json === undefined
+      ? {}
+      : { signed_context_json: requireRunExecutionWorkloadPlainObject(value, 'signed_context_json') }),
     output_schema_version: 'codex_run_execution_result.v1',
     created_at: requireRunExecutionWorkloadString(value, 'created_at'),
     expires_at: requireRunExecutionWorkloadString(value, 'expires_at'),
@@ -2248,6 +2483,7 @@ const productGenerationTaskKindSet = new Set<string>([
   'boundary_brainstorming_round',
   'development_plan_item_spec_revision',
   'development_plan_item_execution_plan_revision',
+  'review_response',
 ]);
 const boundaryRoundRuntimeResultKeys = new Set([
   'schema_version',
@@ -2302,6 +2538,15 @@ const generatedExecutionPlanRevisionKeys = new Set([
   'public_summary',
 ]);
 const generatedExecutionPlanRequiredCheckKeys = new Set(['check_id', 'command', 'timeout_seconds', 'blocks_review']);
+const reviewResponseRuntimeResultKeys = new Set([
+  'schema_version',
+  'response_markdown',
+  'summary',
+  'public_summary',
+  'evidence_refs',
+  'follow_up_questions',
+]);
+const reviewResponseEvidenceRefKeys = new Set(['id', 'display_text', 'digest']);
 const codexRunExecutionPatchArtifactKeys = new Set(['content_type', 'digest', 'internal_ref']);
 const codexRunExecutionCheckResultKeys = new Set(['name', 'status', 'summary', 'output_digest', 'output_internal_ref']);
 const codexRunExecutionContinuationEvidenceFields = [
@@ -2717,6 +2962,44 @@ const requireGeneratedExecutionPlanRevisionPayload = (input: Record<string, unkn
   assertGeneratedPayloadPublicSafe(input);
 };
 
+const requireReviewResponseEvidenceRefPayload = (input: unknown, field: string): void => {
+  if (!isPlainObject(input)) {
+    throw unsafeCodexRuntimePublicValue(`Codex review response ${field} must contain evidence objects.`);
+  }
+  assertCodexRuntimeResultKeys(input, reviewResponseEvidenceRefKeys, field);
+  requireCodexRuntimeResultString(input, 'id');
+  requireCodexRuntimeResultString(input, 'display_text');
+  requireCodexRuntimeResultDigest(input, 'digest');
+};
+
+const requireReviewResponseRuntimeResultPayload = (input: Record<string, unknown>): void => {
+  assertCodexRuntimeResultKeys(input, reviewResponseRuntimeResultKeys, 'review response generated_payload');
+  if (input.schema_version !== 'review_response.v1') {
+    throw unsafeCodexRuntimePublicValue('Codex review response generated_payload schema_version is invalid.');
+  }
+  requireCodexRuntimeResultString(input, 'response_markdown');
+  requireCodexRuntimeResultString(input, 'summary');
+  requireCodexRuntimeResultString(input, 'public_summary');
+  if (input.evidence_refs !== undefined) {
+    requireCodexRuntimeResultArray(input, 'evidence_refs').forEach((entry) =>
+      requireReviewResponseEvidenceRefPayload(entry, 'evidence_refs'),
+    );
+  }
+  if (input.follow_up_questions !== undefined) {
+    requireCodexRuntimeResultStringArray(input, 'follow_up_questions');
+  }
+  assertGeneratedPayloadPublicSafe(input);
+};
+
+const reviewResponseMutationArtifactPattern = /patch|diff|changed[_-]?files?|workspace|commit|pull[_-]?request|run[_-]?execution/i;
+
+const assertReviewResponseGenerationArtifactIsReadOnly = (artifact: Record<string, unknown>): void => {
+  const descriptor = `${String(artifact.kind ?? '')}:${String(artifact.name ?? '')}:${String(artifact.content_type ?? '')}`;
+  if (reviewResponseMutationArtifactPattern.test(descriptor)) {
+    throw unsafeCodexRuntimePublicValue('Codex review response terminal result cannot include mutation artifacts.');
+  }
+};
+
 const requireProductGenerationPayload = (taskKind: CodexGenerationTaskKind, generatedPayload: Record<string, unknown>): void => {
   switch (taskKind) {
     case 'boundary_brainstorming_round':
@@ -2727,6 +3010,9 @@ const requireProductGenerationPayload = (taskKind: CodexGenerationTaskKind, gene
       return;
     case 'development_plan_item_execution_plan_revision':
       requireGeneratedExecutionPlanRevisionPayload(generatedPayload);
+      return;
+    case 'review_response':
+      requireReviewResponseRuntimeResultPayload(generatedPayload);
       return;
     case 'spec_draft':
     case 'plan_draft':
@@ -2762,9 +3048,15 @@ const requireCodexGenerationRuntimeJobResult = (input: Record<string, unknown>):
   const taskKind = input.task_kind as CodexGenerationTaskKind;
   requireCodexRuntimeResultString(input, 'prompt_version');
   requireCodexRuntimeResultString(input, 'output_schema_version');
+  if (taskKind === 'review_response' && input.output_schema_version !== 'review_response.v1') {
+    throw unsafeCodexRuntimePublicValue('Codex review response terminal result output_schema_version is invalid.');
+  }
   const generatedPayload = requireCodexRuntimeResultRecord(input, 'generated_payload');
   const generatedPayloadDigest = requireCodexRuntimeResultDigest(input, 'generated_payload_digest');
   if (isGeneratedPayloadArtifactRefPayload(generatedPayload)) {
+    if (taskKind === 'review_response') {
+      throw unsafeCodexRuntimePublicValue('Codex review response terminal result must inline review_response.v1 payload.');
+    }
     requireGeneratedPayloadArtifactRefPayload(generatedPayload);
   } else {
     if (generatedPayloadDigest !== codexCanonicalDigest(generatedPayload)) {
@@ -2775,9 +3067,12 @@ const requireCodexGenerationRuntimeJobResult = (input: Record<string, unknown>):
   if (Buffer.byteLength(JSON.stringify(generatedPayload), 'utf8') > codexRuntimeGeneratedPayloadInlineMaxBytes) {
     throw unsafeCodexRuntimePublicValue('Codex generation terminal result generated_payload must be uploaded as an artifact ref.');
   }
-  requireCodexRuntimeResultArray(input, 'generation_artifacts').forEach((artifact) =>
-    requireCodexRuntimeArtifact(artifact, 'generation_artifacts'),
-  );
+  requireCodexRuntimeResultArray(input, 'generation_artifacts').forEach((artifact) => {
+    const parsedArtifact = requireCodexRuntimeArtifact(artifact, 'generation_artifacts');
+    if (taskKind === 'review_response') {
+      assertReviewResponseGenerationArtifactIsReadOnly(parsedArtifact);
+    }
+  });
   if (input.codex_session_thread !== undefined) {
     requireCodexSessionThreadTerminalEvidence(input.codex_session_thread);
   }
@@ -3104,7 +3399,8 @@ export const validateCodexLaunchTargetKind = (
 ): void => {
   const valid =
     (targetType === 'automation_action_run' && targetKind === 'generation') ||
-    (targetType === 'run_session' && targetKind === 'run_execution');
+    (targetType === 'run_session' && targetKind === 'run_execution') ||
+    (targetType === 'plan_item_workflow_action' && targetKind === 'generation');
   if (!valid) {
     throw invalidProfile(`Launch target type ${targetType} cannot use Codex runtime target kind ${targetKind}.`);
   }

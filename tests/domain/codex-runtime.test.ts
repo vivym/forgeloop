@@ -18,6 +18,8 @@ import {
   isLegacyCodexRuntimeJobArtifactRefString,
   assertCodexRuntimePublicSafeValue,
   redactCodexLaunchMaterialization,
+  validateCodexGenerationWorkload,
+  validateCodexLaunchTargetKind,
   validateCodexRuntimeJobTerminalResult,
   validateCodexRuntimeJobArtifactIntake,
   validateCodexRunExecutionWorkload,
@@ -319,6 +321,21 @@ const generatedExecutionPlanRevisionPayload = () => ({
   rollback_notes: 'Revert generated runtime changes.',
   handoff_criteria: ['Targeted tests pass'],
   public_summary: 'Generated an Implementation Plan Doc revision.',
+});
+
+const reviewResponseRuntimeResultPayload = () => ({
+  schema_version: 'review_response.v1',
+  response_markdown: 'The requested changes are clear. I will preserve the existing Codex session and address them.',
+  summary: 'Responded to the current Review Packet.',
+  public_summary: 'Prepared a read-only review response.',
+  evidence_refs: [
+    {
+      id: 'evidence-1',
+      display_text: 'Reviewer comment',
+      digest: digestA,
+    },
+  ],
+  follow_up_questions: ['Confirm whether the retry branch should remain in scope.'],
 });
 
 const generationTerminalResult = (taskKind: string, generatedPayload: Record<string, unknown>) => ({
@@ -655,6 +672,139 @@ describe('codex runtime domain contracts', () => {
 	      'codex_generation_workload_unsupported',
 	    );
 	  });
+
+  it('validates plan item workflow action review-response generation workloads', () => {
+    expect(() => validateCodexLaunchTargetKind('plan_item_workflow_action', 'generation')).not.toThrow();
+    expect(() => validateCodexLaunchTargetKind('plan_item_workflow_action', 'run_execution')).toThrow(
+      /cannot use Codex runtime target kind/,
+    );
+
+    const workload = {
+      schema_version: 'codex_generation_workload.v1',
+      runtime_job_id: 'runtime-job-review-response-1',
+      plan_item_workflow_action_id: 'action-respond-1',
+      plan_item_workflow_id: 'workflow-1',
+      codex_session_id: 'session-1',
+      codex_session_turn_id: 'turn-review-response-1',
+      review_packet_id: 'review-packet-1',
+      review_packet_digest: digestA,
+      task_kind: 'review_response',
+      prompt_version: 'review-response.v1',
+      output_schema_version: 'review_response.v1',
+      signed_context_ref: 'artifact://codex-runtime-jobs/runtime-job-review-response-1/context',
+      signed_context_digest: digestB,
+      prompt_template_digest: digestC,
+      created_at: '2026-06-07T00:00:00.000Z',
+      expires_at: '2026-06-07T00:10:00.000Z',
+    };
+
+    const matchingRuntimeContext = {
+      schema_version: 'codex_session_runtime_context.v1',
+      codex_session_id: 'session-1',
+      codex_session_turn_id: 'turn-review-response-1',
+      lease_id: 'lease-review-response-1',
+      lease_epoch: 1,
+      worker_id: 'worker-1',
+      worker_session_digest: digestC,
+      turn_group_status: 'intermediate',
+      continuation: {
+        kind: 'resume_thread',
+        codex_thread_id: 'thread-1',
+        codex_thread_id_digest: workflowRunExecutionThreadDigest,
+      },
+    };
+    const matchingTerminalization = {
+      schema_version: 'codex_session_terminalization.v1',
+      lease_token: 'lease-token-secret',
+      codex_session_id: 'session-1',
+      codex_session_turn_id: 'turn-review-response-1',
+    };
+    expect(
+      validateCodexGenerationWorkload({
+        ...workload,
+        codex_session_runtime_context: matchingRuntimeContext,
+        codex_session_terminalization: matchingTerminalization,
+      }),
+    ).toMatchObject({
+      codex_session_id: 'session-1',
+      codex_session_turn_id: 'turn-review-response-1',
+    });
+    expectDomainErrorCode(
+      () =>
+        validateCodexGenerationWorkload({
+          ...workload,
+          codex_session_runtime_context: {
+            ...matchingRuntimeContext,
+            codex_session_turn_id: 'turn-other',
+          },
+        }),
+      'codex_generation_workload_unsupported',
+    );
+    expectDomainErrorCode(() => validateCodexGenerationWorkload(workload), 'codex_generation_workload_unsupported');
+    expectDomainErrorCode(
+      () =>
+        validateCodexGenerationWorkload({
+          ...workload,
+          codex_session_runtime_context: matchingRuntimeContext,
+        }),
+      'codex_generation_workload_unsupported',
+    );
+    expectDomainErrorCode(
+      () =>
+        validateCodexGenerationWorkload({
+          ...workload,
+          codex_session_terminalization: matchingTerminalization,
+        }),
+      'codex_generation_workload_unsupported',
+    );
+    expectDomainErrorCode(
+      () =>
+        validateCodexGenerationWorkload({
+          ...workload,
+          codex_session_terminalization: {
+            ...matchingTerminalization,
+            codex_session_id: 'session-other',
+          },
+        }),
+      'codex_generation_workload_unsupported',
+    );
+    expectDomainErrorCode(
+      () =>
+        validateCodexGenerationWorkload({
+          ...workload,
+          action_run_id: 'automation-action-run-1',
+        }),
+      'codex_generation_workload_unsupported',
+    );
+    expectDomainErrorCode(
+      () =>
+        validateCodexGenerationWorkload({
+          ...workload,
+          review_packet_digest: undefined,
+        }),
+      'codex_generation_workload_unsupported',
+    );
+  });
+
+  it('validates run-execution fix-loop lineage fields as an all-or-none group', () => {
+    const fixLoopWorkload = {
+      ...workflowRunExecutionWorkload,
+      previous_run_session_id: 'run-session-previous',
+      previous_review_packet_id: 'review-packet-previous',
+      review_packet_digest: digestB,
+    };
+
+    expect(validateCodexRunExecutionWorkload(fixLoopWorkload)).toEqual(fixLoopWorkload);
+    expect(validateCodexRunExecutionWorkload(workflowRunExecutionWorkload).previous_run_session_id).toBeUndefined();
+    expectDomainErrorCode(
+      () =>
+        validateCodexRunExecutionWorkload({
+          ...workflowRunExecutionWorkload,
+          previous_run_session_id: 'run-session-previous',
+        }),
+      'codex_generation_workload_unsupported',
+    );
+  });
 
   it('validates workflow-owned run-execution workload continuity against active session and worker expectations', () => {
     expect(
@@ -1033,6 +1183,72 @@ describe('codex runtime domain contracts', () => {
     const result = generationTerminalResult(taskKind, payloadFactory());
 
     expect(validateCodexRuntimeJobTerminalResult(result)).toEqual(result);
+  });
+
+  it('validates read-only review response terminal generation results', () => {
+    const result = {
+      ...generationTerminalResult('review_response', reviewResponseRuntimeResultPayload()),
+      output_schema_version: 'review_response.v1',
+    };
+
+    expect(validateCodexRuntimeJobTerminalResult(result)).toEqual(result);
+    expectDomainErrorCode(
+      () =>
+        validateCodexRuntimeJobTerminalResult({
+          ...result,
+          output_schema_version: 'generation-output.v1',
+        }),
+      'codex_docker_runtime_evidence_unsafe',
+    );
+    expectDomainErrorCode(
+      () =>
+        validateCodexRuntimeJobTerminalResult({
+          ...result,
+          generated_payload: {
+            ...reviewResponseRuntimeResultPayload(),
+            patch_artifact: 'artifact://codex-runtime-jobs/runtime-job-1/patch',
+          },
+          generated_payload_digest: codexCanonicalDigest({
+            ...reviewResponseRuntimeResultPayload(),
+            patch_artifact: 'artifact://codex-runtime-jobs/runtime-job-1/patch',
+          }),
+        }),
+      'codex_docker_runtime_evidence_unsafe',
+    );
+    expectDomainErrorCode(
+      () =>
+        validateCodexRuntimeJobTerminalResult({
+          ...result,
+          generation_artifacts: [
+            {
+              kind: 'diff',
+              name: 'review.patch',
+              content_type: 'text/x-diff',
+              digest: digestA,
+              internal_ref: 'artifact://internal/codex_runtime_job_artifact/codex_runtime_job/runtime-job-1/review-patch',
+            },
+          ],
+        }),
+      'codex_docker_runtime_evidence_unsafe',
+    );
+    expectDomainErrorCode(
+      () =>
+        validateCodexRuntimeJobTerminalResult({
+          ...result,
+          generated_payload: {
+            schema_version: 'generated_payload_ref.v1',
+            artifact: {
+              kind: 'generated_payload',
+              name: 'payload.json',
+              content_type: 'application/json',
+              digest: generatedPayloadArtifactByteDigest,
+              internal_ref: 'artifact://internal/codex_runtime_job_artifact/codex_runtime_job/runtime-job-1/artifact-1',
+            },
+          },
+          generated_payload_digest: generatedPayloadDigest,
+        }),
+      'codex_docker_runtime_evidence_unsafe',
+    );
   });
 
   it('allows generation artifact refs in structured terminal results without treating them as raw endpoints', () => {

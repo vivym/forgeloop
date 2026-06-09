@@ -51,7 +51,11 @@ import type {
   UnlinkReleaseScopeBody,
   WorkItem,
   WorkItemIntakeContext,
+  AbandonWorkflowSessionBody,
+  ContinueWorkflowExecutionBody,
   EvaluateWorkflowExecutionReadinessBody,
+  RequestWorkflowReviewFixBody,
+  RespondToWorkflowReviewBody,
   RunQueuedWorkflowActionBody,
   WorkflowArtifactType,
   WorkflowMessageCommandBody,
@@ -60,8 +64,12 @@ import type {
 
 export type {
   ApproveWorkflowArtifactRevisionBody,
+  AbandonWorkflowSessionBody,
+  ContinueWorkflowExecutionBody,
   EvaluateWorkflowExecutionReadinessBody,
+  RequestWorkflowReviewFixBody,
   RequestWorkflowArtifactChangesBody,
+  RespondToWorkflowReviewBody,
   RunQueuedWorkflowActionBody,
   WorkflowArtifactType,
   WorkflowMessageCommandBody,
@@ -531,6 +539,30 @@ export function createForgeloopCommandApi(options: ForgeloopApiOptions = {}) {
       }),
     startPlanItemWorkflowExecution: (workflowId: string, body: StartPlanItemWorkflowExecutionBody) =>
       request<PlanItemWorkflowPublicDto>(`/plan-item-workflows/${encodeURIComponent(workflowId)}/execution/start`, {
+        method: 'POST',
+        body,
+        ...actorRequest(body.actor_id),
+      }),
+    continuePlanItemWorkflowExecution: (workflowId: string, body: ContinueWorkflowExecutionBody) =>
+      request<PlanItemWorkflowPublicDto>(`/plan-item-workflows/${encodeURIComponent(workflowId)}/execution/continue`, {
+        method: 'POST',
+        body,
+        ...actorRequest(body.actor_id),
+      }),
+    respondToPlanItemWorkflowReview: (workflowId: string, body: RespondToWorkflowReviewBody) =>
+      request<PlanItemWorkflowPublicDto>(`/plan-item-workflows/${encodeURIComponent(workflowId)}/code-review/respond`, {
+        method: 'POST',
+        body,
+        ...actorRequest(body.actor_id),
+      }),
+    requestPlanItemWorkflowReviewFix: (workflowId: string, body: RequestWorkflowReviewFixBody) =>
+      request<PlanItemWorkflowPublicDto>(`/plan-item-workflows/${encodeURIComponent(workflowId)}/code-review/request-fix`, {
+        method: 'POST',
+        body,
+        ...actorRequest(body.actor_id),
+      }),
+    abandonPlanItemWorkflowSession: (workflowId: string, body: AbandonWorkflowSessionBody) =>
+      request<PlanItemWorkflowPublicDto>(`/plan-item-workflows/${encodeURIComponent(workflowId)}/recovery/abandon-and-new-session`, {
         method: 'POST',
         body,
         ...actorRequest(body.actor_id),

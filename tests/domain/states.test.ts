@@ -1501,6 +1501,24 @@ describe('domain state transitions', () => {
         },
         review_context: {
           latest_decision: 'changes_requested',
+          review_packet_id: 'review-packet-1',
+          review_packet_digest: `sha256:${'a'.repeat(64)}`,
+          previous_run_session_id: 'run-previous-1',
+          approved_spec_revision_id: 'spec-revision-1',
+          approved_implementation_plan_revision_id: 'plan-revision-1',
+          execution_package_id: 'package-1',
+          execution_package_version: 2,
+          path_policy_digest: `sha256:${'b'.repeat(64)}`,
+          required_checks: runSpec.required_checks.map((check) => ({ ...check })),
+          evidence_refs: [
+            {
+              id: 'evidence-1',
+              ref_kind: 'github_comment_url',
+              display_text: 'Reviewer comment',
+              digest: `sha256:${'c'.repeat(64)}`,
+            },
+          ],
+          review_response_ids: ['review-response-1'],
           requested_changes: [
             {
               title: 'Original change',
@@ -1542,6 +1560,20 @@ describe('domain state transitions', () => {
       });
       runSpecInput.repo.local_path = '/mutated/worktree';
       runSpecInput.context.required_checks[0].command = 'pnpm mutated';
+      runSpecInput.review_context.required_checks?.push({
+        check_id: 'mutated-check',
+        display_name: 'Mutated check',
+        command: 'pnpm mutated',
+        timeout_seconds: 30,
+        blocks_review: true,
+      });
+      runSpecInput.review_context.evidence_refs?.push({
+        id: 'evidence-2',
+        ref_kind: 'markdown_excerpt',
+        display_text: 'Mutated evidence',
+        digest: `sha256:${'d'.repeat(64)}`,
+      });
+      runSpecInput.review_context.review_response_ids?.push('review-response-mutated');
       runSpecInput.review_context.requested_changes[0].title = 'Mutated change';
       runSpecInput.review_context.requested_changes.push({
         title: 'New change',
@@ -1574,6 +1606,24 @@ describe('domain state transitions', () => {
           severity: 'major',
         },
       ]);
+      expect(session.run_spec?.review_context.required_checks).toEqual([
+        {
+          check_id: 'domain-tests',
+          display_name: 'Domain tests',
+          command: 'pnpm test tests/domain',
+          timeout_seconds: 120,
+          blocks_review: true,
+        },
+      ]);
+      expect(session.run_spec?.review_context.evidence_refs).toEqual([
+        {
+          id: 'evidence-1',
+          ref_kind: 'github_comment_url',
+          display_text: 'Reviewer comment',
+          digest: `sha256:${'c'.repeat(64)}`,
+        },
+      ]);
+      expect(session.run_spec?.review_context.review_response_ids).toEqual(['review-response-1']);
       expect(session.run_spec?.allowed_paths).toEqual(['packages/domain/**', 'tests/domain/**']);
       expect(session.run_spec?.source_mutation_policy).toBe('no_source_changes');
       expect(session.run_spec?.artifact_policy.requested_artifacts).toEqual(['execution_summary', 'diff']);

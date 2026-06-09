@@ -2,18 +2,22 @@ import { randomUUID } from 'node:crypto';
 import { Inject, Injectable } from '@nestjs/common';
 import {
   DomainError,
+  assertReviewPacketEvidenceRefsAreSafe,
   assertPlanItemWorkflowTransitionAllowed,
   assertQueuedActionCanRun,
   assertWorkflowMessageAllowed,
   assertWorkflowActorAuthorized,
   buildPlanItemWorkflowQueuedActionIdempotencyKey,
+  codexRuntimeJobIsActive,
   codexCredentialPayloadDigest,
   codexCanonicalDigest,
   codexRuntimeJobInputDigest,
   codexRuntimeNetworkPolicyDigest,
   codexWorkspaceAcquisitionDigest,
+  determineAbandonNewSessionFallback,
   mapQueuedActionKindToTurnIntent,
   planItemWorkflowPublicProjection,
+  reviewPacketInputDigest,
   transitionRunSession,
   type BrainstormingSession,
   type BoundaryAnswer,
@@ -22,20 +26,32 @@ import {
   type BoundarySummary,
   type BoundarySummaryRevision,
   type CodexSession,
+  type CodexSessionLease,
   type CodexSessionTurn,
+  type CodexLaunchLease,
   type CodexRunExecutionWorkloadV1,
+  type CodexRuntimeCapsule,
   type CodexRuntimeJob,
   type CodexWorkerRegistration,
+  type CommandIdempotencyRecord,
   type ContextManifest,
   type DevelopmentPlanItem,
+  type DomainErrorCode,
   type ExecutionPlanDocument,
   type ExecutionPlanRevision,
   type ExecutionPackage,
+  type ExecutionContinuationLineage,
   type ExecutionReadinessRecord,
+  type RunRuntimeMetadata,
   type RunSession,
   type Spec,
   type PlanItemWorkflow,
   type PlanItemWorkflowQueuedAction,
+  type ReviewPacket,
+  type ReviewPacketEvidenceRef,
+  type ReviewResponse,
+  type RunCommand,
+  type RunWorkerLease,
   type SpecRevision,
   type WorkflowPersistenceRefs,
   type WorkflowManualDecision,
@@ -51,9 +67,11 @@ import {
   workspaceBundleArchiveDigest,
   workspaceBundleManifestDigest,
 } from '@forgeloop/codex-worker-runtime';
-import type { RequiredCheckSpec, RunSpec } from '@forgeloop/contracts';
+import { planItemWorkflowQueuedActionKindSchema, runSpecSchema, type ArtifactKind, type RequiredCheckSpec, type RunSpec } from '@forgeloop/contracts';
 import type {
   PlanItemWorkflowExecutionRunSummary,
+  PlanItemWorkflowAttemptHistory,
+  PlanItemWorkflowRecoveryOption,
   PlanItemWorkflowPublicDto,
   PlanItemWorkflowReadiness,
   PlanItemWorkflowQueuedActionKind,
@@ -68,10 +86,15 @@ import { BrainstormingService } from '../brainstorming/brainstorming.service';
 import { DELIVERY_REPOSITORY, INTERNAL_ARTIFACT_STORE_ROOT } from '../core/control-plane-tokens';
 import { executionPackageActorFields } from '../execution-packages/execution-package-actor-fields';
 import { SpecPlanService, type ProductGenerationScheduleResult } from '../spec-plan/spec-plan.service';
+import { ProductGenerationRuntimeSchedulerService } from '../codex-runtime/product-generation-runtime-scheduler.service';
 import type {
   ApproveWorkflowArtifactRevisionBodyDto,
+  AbandonWorkflowSessionBodyDto,
+  ContinueWorkflowExecutionBodyDto,
   EvaluateWorkflowExecutionReadinessBodyDto,
   RequestWorkflowArtifactChangesBodyDto,
+  RequestWorkflowReviewFixBodyDto,
+  RespondToWorkflowReviewBodyDto,
   RunQueuedWorkflowActionBodyDto,
   StartBrainstormingWorkflowDto,
   StartWorkflowExecutionBodyDto,
@@ -96,6 +119,17 @@ type WorkflowTransitionCommandDto = {
     digest?: string | undefined;
   }> | undefined;
 };
+type AbandonNewSessionPublicNextAction = PlanItemWorkflowRecoveryOption['next_action'];
+const abandonNewSessionPublicNextActions = new Set<NonNullable<AbandonNewSessionPublicNextAction>>([
+  'respond_to_review',
+  'request_fix',
+  'start_execution',
+  'review_implementation_plan',
+  'generate_implementation_plan',
+  'review_spec',
+  'generate_spec',
+  'brainstorm',
+]);
 type ExecutionReadinessBlockerCode =
   | 'boundary_summary_revision_missing'
   | 'spec_doc_revision_missing'
@@ -117,6 +151,8 @@ type ExecutionReadinessBlockerCode =
   | 'workflow_action_pending'
   | 'run_session_exists'
   | 'execution_package_boundary_missing';
+
+const reviewFixBaseRequestedArtifacts: ArtifactKind[] = ['diff', 'changed_files', 'check_output', 'execution_summary'];
 type ExecutionPackageBoundaryResult = {
   readiness: ExecutionReadinessRecord;
   executionPackage?: ExecutionPackage;
@@ -185,12 +221,45 @@ type WorkflowExecutionStartLineage = {
   codexThreadIdDigest?: string;
   status: string;
 };
+type ContinuationDecision =
+  | {
+      mode: 'existing_job_input';
+      runSession: RunSession;
+      runtimeJob: CodexRuntimeJob;
+      codexSessionLease: CodexSessionLease;
+      runWorkerLease: RunWorkerLease;
+      launchLease: CodexLaunchLease;
+    }
+  | {
+      mode: 'replay_current_continuation';
+      runSession: RunSession;
+      runtimeJob: CodexRuntimeJob;
+      codexSessionLease: CodexSessionLease;
+      runWorkerLease: RunWorkerLease;
+      launchLease: CodexLaunchLease;
+    }
+  | {
+      mode: 'relaunch_after_fencing';
+      runSession: RunSession;
+      previousRuntimeJob: CodexRuntimeJob;
+      previousCodexSessionLease: CodexSessionLease;
+      previousRunWorkerLease?: RunWorkerLease;
+      cancelRecovery?: boolean;
+    }
+  | { mode: 'reject'; code: DomainErrorCode };
 
 const runtimeNetworkProviderConfigDigest = (revision: CodexRuntimeProfileRevision): string | undefined => {
   const policy = revision.network_policy;
   return policy.mode === 'egress_allowlist' && policy.provider === 'docker_network_proxy'
     ? policy.provider_config.provider_config_digest
     : undefined;
+};
+
+const stableUuid = (scope: Record<string, unknown>): string => {
+  const hex = codexCanonicalDigest(scope).replace(/^sha256:/, '');
+  const version = `4${hex.slice(13, 16)}`;
+  const variant = `${((Number.parseInt(hex.slice(16, 17), 16) & 0x3) | 0x8).toString(16)}${hex.slice(17, 20)}`;
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${version}-${variant}-${hex.slice(20, 32)}`;
 };
 
 @Injectable()
@@ -200,6 +269,7 @@ export class PlanItemWorkflowService {
     @Inject(INTERNAL_ARTIFACT_STORE_ROOT) private readonly internalArtifactStoreRoot: string,
     @Inject(BrainstormingService) private readonly brainstorming: BrainstormingService,
     @Inject(SpecPlanService) private readonly specPlan: SpecPlanService,
+    @Inject(ProductGenerationRuntimeSchedulerService) private readonly productGenerationRuntime: ProductGenerationRuntimeSchedulerService,
   ) {}
 
   async startBrainstorming(developmentPlanId: string, itemId: string, dto: StartBrainstormingWorkflowDto) {
@@ -243,7 +313,7 @@ export class PlanItemWorkflowService {
           actor_id: dto.actor_id,
         });
 
-        return this.toPublicWorkflowDto(updated, created.session, [queuedAction]);
+        return this.toPublicWorkflowDtoWithRepository(repository, updated, created.session, [queuedAction]);
       }),
     );
   }
@@ -387,7 +457,7 @@ export class PlanItemWorkflowService {
           message_id: messageId,
           queued_action_id: queuedAction.id,
         });
-        return this.toPublicWorkflowDto(workflow, session, [queuedAction]);
+        return this.toPublicWorkflowDtoWithRepository(repository, workflow, session, [queuedAction]);
       }),
     );
   }
@@ -409,7 +479,7 @@ export class PlanItemWorkflowService {
           );
         }
         if (action.status !== 'queued') {
-          const publicWorkflow = this.toPublicWorkflowDto(workflow, session, [action]);
+          const publicWorkflow = await this.toPublicWorkflowDtoWithRepository(repository, workflow, session, [action]);
           return { workflow: publicWorkflow, queued_action: this.publicQueuedAction(publicWorkflow, action.id) };
         }
         assertQueuedActionCanRun({
@@ -439,9 +509,9 @@ export class PlanItemWorkflowService {
             codex_session_turn_id: turn.id,
             now: this.now(),
           });
-          if (this.shouldUseRuntimeGenerationBridge()) {
+          if (actionWithTurn.kind === 'respond_to_review' || this.shouldUseRuntimeGenerationBridge()) {
             await this.scheduleQueuedActionRuntimeGeneration(repository, workflow, session, actionWithTurn, turn, input.actor_id);
-            const publicWorkflow = this.toPublicWorkflowDto(workflow, session, [actionWithTurn]);
+            const publicWorkflow = await this.toPublicWorkflowDtoWithRepository(repository, workflow, session, [actionWithTurn]);
             return {
               workflow: publicWorkflow,
               queued_action: this.publicQueuedAction(publicWorkflow, actionWithTurn.id),
@@ -455,13 +525,18 @@ export class PlanItemWorkflowService {
             turn,
             input.actor_id,
           );
-          const publicWorkflow = this.toPublicWorkflowDto(handled.workflow, handled.session, handled.queued_actions ?? [handled.action]);
+          const publicWorkflow = await this.toPublicWorkflowDtoWithRepository(
+            repository,
+            handled.workflow,
+            handled.session,
+            handled.queued_actions ?? [handled.action],
+          );
           return {
             workflow: publicWorkflow,
             queued_action: this.publicQueuedAction(publicWorkflow, handled.action.id),
           };
         }
-        const publicWorkflow = this.toPublicWorkflowDto(workflow, session, [queuedAction]);
+        const publicWorkflow = await this.toPublicWorkflowDtoWithRepository(repository, workflow, session, [queuedAction]);
         return { workflow: publicWorkflow, queued_action: this.publicQueuedAction(publicWorkflow, queuedAction.id) };
       }),
     );
@@ -539,7 +614,163 @@ export class PlanItemWorkflowService {
           context,
         );
         return;
+      case 'respond_to_review': {
+        const reviewContext = await this.reviewResponseRuntimeContext(repository, workflow, action);
+        await this.productGenerationRuntime.schedulePlanItemWorkflowReviewResponse({
+          repository,
+          action,
+          review_packet_id: reviewContext.review_packet_id,
+          review_packet_digest: reviewContext.review_packet_digest,
+          previous_run_session_id: reviewContext.previous_run_session_id,
+          prompt_version: 'review-response:v1',
+          context_manifest: reviewContext.context_manifest,
+          signed_context_json: reviewContext.signed_context_json,
+          project_id: reviewContext.project_id,
+          repo_ids: reviewContext.repo_id === undefined ? [] : [reviewContext.repo_id],
+        });
+        return;
+      }
+      case 'continue_execution':
+      case 'request_fix':
+        throw new DomainError(
+          'workflow_action_not_runnable',
+          `workflow_action_not_runnable: ${action.kind} must run through its dedicated workflow command`,
+        );
     }
+  }
+
+  private async reviewResponseRuntimeContext(
+    repository: DeliveryRepository,
+    workflow: PlanItemWorkflow,
+    action: PlanItemWorkflowQueuedAction,
+    options: {
+      expected_review_packet_id?: string;
+      expected_review_packet_digest?: string;
+      response_prompt_markdown?: string;
+    } = {},
+  ): Promise<{
+    review_packet_id: string;
+    review_packet_digest: string;
+    previous_run_session_id: string;
+    context_manifest: ContextManifest;
+    signed_context_json: Record<string, unknown>;
+    project_id: string;
+    repo_id?: string;
+  }> {
+    const executionPackageId = this.requireString(workflow.execution_package_id, 'Workflow execution package is missing');
+    const executionPackage = await repository.getExecutionPackage(executionPackageId);
+    if (
+      executionPackage === undefined ||
+      executionPackage.workflow_id !== workflow.id ||
+      executionPackage.codex_session_id !== workflow.active_codex_session_id
+    ) {
+      throw new DomainError('workflow_evidence_not_owned', 'Execution Package does not belong to this workflow/session');
+    }
+    const packageVersion = executionPackage.execution_package_version ?? executionPackage.version;
+    const previousRunSessionId = this.requireString(
+      executionPackage.last_run_session_id,
+      'Execution Package previous run session is missing',
+    );
+    const approvedSpecRevisionId = this.requireString(workflow.active_spec_doc_revision_id, 'Workflow approved Spec Doc is missing');
+    const approvedPlanRevisionId = this.requireString(
+      workflow.active_implementation_plan_doc_revision_id,
+      'Workflow approved Implementation Plan Doc is missing',
+    );
+    const currentReviewPacket = await this.requireCurrentReviewPacketForWorkflow(repository, workflow, {
+      previous_run_session_id: previousRunSessionId,
+      execution_package_version: packageVersion,
+      approved_spec_revision_id: approvedSpecRevisionId,
+      approved_implementation_plan_revision_id: approvedPlanRevisionId,
+      ...(options.expected_review_packet_id === undefined
+        ? {}
+        : { expected_review_packet_id: options.expected_review_packet_id }),
+      ...(options.expected_review_packet_digest === undefined
+        ? {}
+        : { expected_review_packet_digest: options.expected_review_packet_digest }),
+      command_kind: 'respond_to_review',
+    });
+    const item = await this.requirePlanItemBelongsToPlan(repository, workflow.development_plan_id, workflow.development_plan_item_id);
+    const contextManifest = await this.ensureDeterministicContextManifest(repository, workflow, item, action.created_by_actor_id);
+    return {
+      review_packet_id: currentReviewPacket.packet.id,
+      review_packet_digest: currentReviewPacket.digest,
+      previous_run_session_id: previousRunSessionId,
+      context_manifest: contextManifest,
+      project_id: executionPackage.project_id,
+      repo_id: executionPackage.repo_id,
+      signed_context_json: {
+        schema_version: 'review_response_context.v1',
+        plan_item_workflow_id: workflow.id,
+        plan_item_workflow_action_id: action.id,
+        review_packet_id: currentReviewPacket.packet.id,
+        review_packet_digest: currentReviewPacket.digest,
+        previous_run_session_id: previousRunSessionId,
+        execution_package_id: executionPackage.id,
+        execution_package_version: packageVersion,
+        approved_spec_revision_id: approvedSpecRevisionId,
+        approved_implementation_plan_revision_id: approvedPlanRevisionId,
+        changed_files: currentReviewPacket.packet.changed_files,
+        check_result_summary: currentReviewPacket.packet.check_result_summary,
+        risk_notes: currentReviewPacket.packet.risk_notes,
+        ...(options.response_prompt_markdown === undefined ? {} : { response_prompt_markdown: options.response_prompt_markdown }),
+        evidence_refs: currentReviewPacket.evidenceRefs.map((ref) => ({
+          id: ref.id,
+          ref_kind: ref.ref_kind,
+          display_text: ref.display_text,
+          digest: ref.digest,
+          ...(ref.url === undefined ? {} : { url: ref.url }),
+          ...(ref.internal_object_ref === undefined ? {} : { internal_object_ref: ref.internal_object_ref }),
+        })),
+      },
+    };
+  }
+
+  private async requireCurrentReviewPacketForWorkflow(
+    repository: DeliveryRepository,
+    workflow: PlanItemWorkflow,
+    input: {
+      previous_run_session_id: string;
+      execution_package_version: number;
+      approved_spec_revision_id: string;
+      approved_implementation_plan_revision_id: string;
+      expected_review_packet_id?: string;
+      expected_review_packet_digest?: string;
+      command_kind: 'respond_to_review' | 'request_fix';
+    },
+  ): Promise<{ packet: ReviewPacket; evidenceRefs: ReviewPacketEvidenceRef[]; digest: string }> {
+    const executionPackageId = this.requireString(workflow.execution_package_id, 'Workflow execution package is missing');
+    const packet = await repository.findCurrentReviewPacketForWorkflow({
+      workflow_id: workflow.id,
+      execution_package_id: executionPackageId,
+      execution_package_version: input.execution_package_version,
+      previous_run_session_id: input.previous_run_session_id,
+      approved_spec_revision_id: input.approved_spec_revision_id,
+      approved_implementation_plan_revision_id: input.approved_implementation_plan_revision_id,
+      ...(input.expected_review_packet_id === undefined ? {} : { expected_review_packet_id: input.expected_review_packet_id }),
+      allowed_statuses: input.command_kind === 'respond_to_review' ? ['ready', 'in_review', 'completed'] : ['completed'],
+      allowed_completed_decisions: ['changes_requested'],
+    });
+    if (packet === undefined) {
+      throw new DomainError('workflow_review_packet_not_current', 'Current Review Packet is missing');
+    }
+    const evidenceRefs = await repository.listReviewPacketEvidenceRefs(packet.id);
+    assertReviewPacketEvidenceRefsAreSafe(packet, evidenceRefs);
+    const digest = reviewPacketInputDigest({
+      packet,
+      evidence_refs: evidenceRefs,
+      previous_run_session_id: input.previous_run_session_id,
+      execution_package_id: executionPackageId,
+      execution_package_version: input.execution_package_version,
+      approved_spec_revision_id: input.approved_spec_revision_id,
+      approved_implementation_plan_revision_id: input.approved_implementation_plan_revision_id,
+    });
+    if (packet.current_digest !== undefined && packet.current_digest !== digest) {
+      throw new DomainError('workflow_review_packet_digest_mismatch', 'Current Review Packet stored digest is stale');
+    }
+    if (input.expected_review_packet_digest !== undefined && digest !== input.expected_review_packet_digest) {
+      throw new DomainError('workflow_review_packet_digest_mismatch', 'Current Review Packet digest does not match request');
+    }
+    return { packet, evidenceRefs, digest };
   }
 
   private blockQueuedWorkflowAction(
@@ -632,6 +863,13 @@ export class PlanItemWorkflowService {
         output_object_id: revision.id,
       });
       return { workflow: updated, session: terminal.session, action: terminal.action };
+    }
+
+    if (action.kind === 'respond_to_review' || action.kind === 'continue_execution' || action.kind === 'request_fix') {
+      throw new DomainError(
+        'workflow_action_not_runnable',
+        `workflow_action_not_runnable: ${action.kind} must run through its dedicated runtime path`,
+      );
     }
 
     const revision = await this.writeDeterministicImplementationPlanRevision(repository, workflow, action, turn, actorId);
@@ -1262,7 +1500,7 @@ export class PlanItemWorkflowService {
           active_implementation_plan_doc_revision_id: implementationPlanRevision.id,
           ...(executionPackage === undefined ? {} : { execution_package_id: executionPackage.id }),
         });
-        return this.toPublicWorkflowDto(updated, session, [], {
+        return this.toPublicWorkflowDtoWithRepository(repository, updated, session, [], {
           readiness: this.readinessProjectionForRecord(readiness),
         });
       }),
@@ -1286,7 +1524,7 @@ export class PlanItemWorkflowService {
         if (workflow.status === 'execution_running') {
           return {
             status_code: 200,
-            workflow: this.toPublicWorkflowDto(workflow, session, [], {
+            workflow: await this.toPublicWorkflowDtoWithRepository(repository, workflow, session, [], {
               execution_run_summary: await this.requireExistingExecutionRunSummary(repository, workflow, session),
             }),
           };
@@ -1676,7 +1914,7 @@ export class PlanItemWorkflowService {
         const runningSession = await repository.getCodexSession(session.id);
         return {
           status_code: 201,
-          workflow: this.toPublicWorkflowDto(updated, runningSession ?? codexLease.session, [], {
+          workflow: await this.toPublicWorkflowDtoWithRepository(repository, updated, runningSession ?? codexLease.session, [], {
             execution_run_summary: this.executionRunSummary({
               workflow: updated,
               session: runningSession ?? codexLease.session,
@@ -1693,6 +1931,2380 @@ export class PlanItemWorkflowService {
         };
       }),
     );
+  }
+
+  async continueExecution(workflowId: string, input: ContinueWorkflowExecutionBodyDto) {
+    return this.repository.withObjectLock(`plan-item-workflow:${workflowId}`, async (lockedRepository) =>
+      lockedRepository.withDeliveryTransaction(async (repository) => {
+        let workflow = await this.requireWorkflow(repository, workflowId);
+        await this.assertActorCanMutateWorkflow(repository, workflow, input.actor_id, 'start_execution');
+        if (workflow.status !== 'execution_running' && !(workflow.status === 'blocked' && workflow.previous_status === 'execution_running')) {
+          throw new DomainError('workflow_invalid_transition', 'Execution continuation requires execution_running');
+        }
+        const session = await this.requireActiveSession(repository, workflow);
+        const executionPackage = this.requireFound(
+          await repository.getExecutionPackage(this.requireString(workflow.execution_package_id, 'Workflow execution package is missing')),
+          `ExecutionPackage ${workflow.execution_package_id}`,
+        );
+        const runSession = this.requireFound(
+          await repository.findActiveRunSessionForPackage(executionPackage.id),
+          `active RunSession for ExecutionPackage ${executionPackage.id}`,
+        );
+        const runtimeJob = this.requireFound(
+          await repository.getCodexRuntimeJob({
+            runtime_job_id: this.requireString(runSession.runtime_metadata?.remote_runtime_job_id, 'Workflow execution runtime job is missing'),
+          }),
+          `CodexRuntimeJob ${runSession.runtime_metadata?.remote_runtime_job_id}`,
+        );
+
+        const decision = await this.classifyExecutionContinuation(repository, {
+          workflow,
+          session,
+          executionPackage,
+          runSession,
+          runtimeJob,
+          input,
+        });
+        if (decision.mode === 'reject') {
+          throw new DomainError(decision.code, `${decision.code}: Workflow execution cannot continue from its current state`);
+        }
+        if (workflow.status === 'blocked') {
+          const recovered = await this.performManualDecisionTransitionRecordWithRepository(
+            repository,
+            workflow,
+            this.manualDecisionInput({
+              actor_id: input.actor_id,
+              to_status: 'execution_running',
+              manual_decision_kind: 'recover',
+              reason: 'Continue same Codex session after execution recovery.',
+            }),
+          );
+          workflow = recovered.updated;
+        }
+
+        const action = await this.createAndClaimContinueExecutionAction(repository, workflow, session, input, decision.mode);
+        if (action.status === 'succeeded') {
+          const currentRunSession = this.requireFound(
+            await repository.getRunSession(runSession.id),
+            `RunSession ${runSession.id}`,
+          );
+          const currentRuntimeJobId = this.requireString(
+            currentRunSession.runtime_metadata?.remote_runtime_job_id,
+            'Workflow execution runtime job is missing',
+          );
+          return this.continuedExecutionProjection(repository, workflow, session, executionPackage, currentRunSession, currentRuntimeJobId);
+        }
+        if (decision.mode === 'existing_job_input') {
+          return this.completeExistingJobInputContinuation(repository, workflow, session, executionPackage, action, decision, input);
+        }
+        if (decision.mode === 'replay_current_continuation') {
+          return this.completeReplayCurrentContinuation(repository, workflow, session, executionPackage, action, decision);
+        }
+        return this.completeRelaunchAfterFencingContinuation(repository, workflow, session, executionPackage, action, decision, input);
+      }),
+    );
+  }
+
+  async respondToReview(workflowId: string, input: RespondToWorkflowReviewBodyDto): Promise<PlanItemWorkflowPublicDto> {
+    return this.repository.withObjectLock(`plan-item-workflow:${workflowId}`, async (lockedRepository) =>
+      lockedRepository.withDeliveryTransaction(async (repository) => {
+        const workflow = await this.requireWorkflow(repository, workflowId);
+        await this.assertActorCanMutateWorkflow(repository, workflow, input.actor_id, 'submit_document_gate');
+        if (workflow.status !== 'code_review') {
+          throw new DomainError('workflow_invalid_transition', 'Review response requires code_review');
+        }
+        const session = await this.requireActiveSession(repository, workflow);
+        const replayAction = await this.respondToReviewReplayActionOrThrow(repository, workflow, session, input);
+        if (replayAction !== undefined && replayAction.status !== 'queued') {
+          return this.toPublicWorkflowDtoWithRepository(repository, workflow, session, [replayAction]);
+        }
+        if (replayAction === undefined) {
+          this.assertCodexSessionIdleForReviewCommand(session);
+        }
+        const action =
+          replayAction ?? (await this.createOrReplayRespondToReviewAction(repository, workflow, session, input));
+        const runningAction =
+          action.status === 'queued'
+            ? await this.claimReviewCommandAction(repository, workflow, session, action)
+            : action;
+        const actionWithTurn =
+          runningAction.codex_session_turn_id === undefined
+            ? await this.attachReviewCommandTurn(repository, workflow, session, runningAction, input.actor_id)
+            : runningAction;
+        const reviewContext = await this.reviewResponseRuntimeContext(repository, workflow, actionWithTurn, {
+          expected_review_packet_id: input.expected_review_packet_id,
+          expected_review_packet_digest: input.expected_review_packet_digest,
+          ...(input.response_prompt_markdown === undefined ? {} : { response_prompt_markdown: input.response_prompt_markdown }),
+        });
+        await this.productGenerationRuntime.schedulePlanItemWorkflowReviewResponse({
+          repository,
+          action: actionWithTurn,
+          review_packet_id: reviewContext.review_packet_id,
+          review_packet_digest: reviewContext.review_packet_digest,
+          previous_run_session_id: reviewContext.previous_run_session_id,
+          prompt_version: 'review-response:v1',
+          context_manifest: reviewContext.context_manifest,
+          signed_context_json: reviewContext.signed_context_json,
+          project_id: reviewContext.project_id,
+          repo_ids: reviewContext.repo_id === undefined ? [] : [reviewContext.repo_id],
+        });
+        const persistedAction =
+          (await repository.getPlanItemWorkflowQueuedAction({ workflow_id: workflow.id, action_id: actionWithTurn.id })) ??
+          actionWithTurn;
+        const persistedSession = (await repository.getCodexSession(session.id)) ?? session;
+        return this.toPublicWorkflowDtoWithRepository(repository, workflow, persistedSession, [persistedAction]);
+      }),
+    );
+  }
+
+  async requestReviewFix(
+    workflowId: string,
+    input: RequestWorkflowReviewFixBodyDto,
+  ): Promise<{ status_code: number; workflow: PlanItemWorkflowPublicDto }> {
+    return this.repository.withObjectLock(`plan-item-workflow:${workflowId}`, async (lockedRepository) =>
+      lockedRepository.withDeliveryTransaction(async (repository) => {
+        const workflow = await this.requireWorkflow(repository, workflowId);
+        await this.assertActorCanMutateWorkflow(repository, workflow, input.actor_id, 'start_execution');
+        const session = await this.requireActiveSession(repository, workflow);
+
+        const executionPackageId = this.requireString(workflow.execution_package_id, 'Workflow execution package is missing');
+        const executionPackage = this.requireFound(
+          await repository.getExecutionPackage(executionPackageId),
+          `ExecutionPackage ${executionPackageId}`,
+        );
+        this.assertReviewFixExecutionPackageOwned(workflow, session, executionPackage);
+        const commandIdempotencyKey = this.reviewFixCommandIdempotencyKey(workflow, session, executionPackage, input);
+        const existingCommand = await repository.getCommandIdempotency(commandIdempotencyKey);
+        if (existingCommand !== undefined) {
+          this.assertReviewFixCommandReplayMatchesInput(existingCommand, workflow, session, executionPackage, input);
+        }
+        const existingReplay = await this.replayReviewFixCommandResult(repository, workflow.id, existingCommand);
+        if (existingReplay !== undefined) {
+          return { status_code: 200, workflow: existingReplay };
+        }
+        if (workflow.status !== 'code_review') {
+          throw new DomainError('workflow_invalid_transition', 'Review fix requires code_review');
+        }
+        this.assertCodexSessionIdleForReviewCommand(session);
+        await this.assertNoActiveWorkflowActions(repository, workflow.id);
+
+        const packageVersion = executionPackage.execution_package_version ?? executionPackage.version;
+        const previousRunSessionId = this.requireString(
+          executionPackage.last_run_session_id,
+          'Execution Package previous run session is missing',
+        );
+        const approvedSpecRevisionId = this.requireString(workflow.active_spec_doc_revision_id, 'Workflow approved Spec Doc is missing');
+        const approvedPlanRevisionId = this.requireString(
+          workflow.active_implementation_plan_doc_revision_id,
+          'Workflow approved Implementation Plan Doc is missing',
+        );
+        const currentReviewPacket = await this.requireCurrentReviewPacketForWorkflow(repository, workflow, {
+          previous_run_session_id: previousRunSessionId,
+          execution_package_version: packageVersion,
+          approved_spec_revision_id: approvedSpecRevisionId,
+          approved_implementation_plan_revision_id: approvedPlanRevisionId,
+          expected_review_packet_id: input.expected_review_packet_id,
+          expected_review_packet_digest: input.expected_review_packet_digest,
+          command_kind: 'request_fix',
+        });
+        if (currentReviewPacket.packet.status !== 'completed' || currentReviewPacket.packet.decision !== 'changes_requested') {
+          throw new DomainError('workflow_review_packet_not_current', 'Review fix requires completed changes_requested Review Packet');
+        }
+        if (currentReviewPacket.packet.requested_changes.length === 0) {
+          throw new DomainError('workflow_review_packet_not_current', 'Review fix requires requested changes');
+        }
+        const previousRunSession = this.requireFound(
+          await repository.getRunSession(currentReviewPacket.packet.run_session_id),
+          `RunSession ${currentReviewPacket.packet.run_session_id}`,
+        );
+        this.assertReviewFixPreviousRunOwned(workflow, session, executionPackage, previousRunSession);
+        if (previousRunSession.id !== previousRunSessionId || !this.isTerminalRunSession(previousRunSession)) {
+          throw new DomainError('workflow_invalid_transition', 'Review fix requires a terminal previous run session');
+        }
+        const { inputCapsule, inputContinuity } = await this.requireLatestExecutionContinuationInputs(repository, workflow, session);
+        const now = this.now();
+        const runtimeBinding = await this.resolveActiveExecutionRuntimeBinding(repository, executionPackage, now);
+        const workerSessionDigest = await repository.getCodexWorkerSessionDigest(runtimeBinding.worker.id);
+        if (workerSessionDigest === undefined) {
+          throw new DomainError('workflow_runtime_binding_unavailable', 'Execution worker session digest is unavailable');
+        }
+        const commandClaimToken = randomUUID();
+        const commandClaim = await this.claimReviewFixCommandIdempotency(repository, {
+          workflow,
+          session,
+          input,
+          executionPackage,
+          packageVersion,
+          previousRunSessionId,
+          currentReviewPacketDigest: currentReviewPacket.digest,
+          approvedSpecRevisionId,
+          approvedPlanRevisionId,
+          inputCapsuleDigest: inputCapsule.digest,
+          inputContinuity,
+          runtimeBinding,
+          workerSessionDigest,
+          idempotencyKey: commandIdempotencyKey,
+          claimToken: commandClaimToken,
+        });
+        try {
+          const result = await this.startReviewFixExecution(repository, {
+            workflow,
+            session,
+            executionPackage,
+            previousRunSession,
+            currentReviewPacket,
+            inputCapsule,
+            inputContinuity,
+            runtimeBinding,
+            workerSessionDigest,
+            actorId: input.actor_id,
+            ...(input.fix_instruction_markdown === undefined ? {} : { fixInstructionMarkdown: input.fix_instruction_markdown }),
+          });
+          await repository.completeCommandIdempotency({
+            idempotency_key: commandClaim.idempotency_key,
+            claim_token: commandClaimToken,
+            result_json: {
+              workflow_id: result.workflow.id,
+              execution_package_id: result.executionPackage.id,
+              run_session_id: result.runSession.id,
+              runtime_job_id: result.runtimeJob.id,
+              codex_session_id: result.session.id,
+              codex_session_turn_id: result.turn.id,
+              input_capsule_digest: result.inputCapsuleDigest,
+              workspace_bundle_digest: result.workspaceBundleDigest,
+              codex_thread_id_digest: this.requireString(
+                result.session.codex_thread_id_digest,
+                'Review fix requires a Codex thread id digest',
+              ),
+            },
+            finished_at: this.now(),
+          });
+          return {
+            status_code: 201,
+            workflow: await this.toPublicWorkflowDtoWithRepository(repository, result.workflow, result.session, [], {
+              execution_run_summary: this.executionRunSummary({
+                workflow: result.workflow,
+                session: result.session,
+                executionPackage: result.executionPackage,
+                runSessionId: result.runSession.id,
+                runtimeJobId: result.runtimeJob.id,
+                executionTurnId: result.turn.id,
+                inputCapsuleDigest: result.inputCapsuleDigest,
+                workspaceBundleDigest: result.workspaceBundleDigest,
+                codexThreadIdDigest: this.requireString(
+                  result.session.codex_thread_id_digest,
+                  'Review fix requires a Codex thread id digest',
+                ),
+                status: result.runSession.status,
+              }),
+            }),
+          };
+        } catch (error) {
+          await this.blockReviewFixCommandIdempotencyAfterError(repository, commandClaim, commandClaimToken, error);
+          throw error;
+        }
+      }),
+    );
+  }
+
+  async abandonAndStartNewSession(workflowId: string, input: AbandonWorkflowSessionBodyDto): Promise<PlanItemWorkflowPublicDto> {
+    return this.repository.withObjectLock(`plan-item-workflow:${workflowId}`, async (lockedRepository) =>
+      lockedRepository.withDeliveryTransaction(async (repository) => {
+        const workflow = await this.requireWorkflow(repository, workflowId);
+        await this.assertActorCanMutateWorkflow(repository, workflow, input.actor_id, 'recover');
+        if (workflow.status !== 'blocked') {
+          throw new DomainError('workflow_invalid_transition', 'Abandon and new session requires blocked workflow');
+        }
+        const session = await this.requireActiveSession(repository, workflow);
+        const now = this.now();
+        await this.assertNoActiveTerminalizableWorkflowRuntime(repository, session, now);
+        const item = await this.requirePlanItemBelongsToPlan(repository, workflow.development_plan_id, workflow.development_plan_item_id);
+        const fallback = await this.determineAbandonNewSessionFallbackForWorkflow(repository, workflow);
+        if (!fallback.expected_next_actions.includes(input.next_action)) {
+          throw new DomainError(
+            'workflow_abandon_next_action_mismatch',
+            `workflow_abandon_next_action_mismatch: requested ${input.next_action} but trusted fallback requires ${fallback.expected_next_actions.join(' or ')}`,
+          );
+        }
+        const runtimeBinding = await this.resolveActiveGenerationRuntimeBinding(repository, item, now);
+        await repository.markDependentPlanItemWorkflowQueuedActionsStale({
+          workflow_id: workflow.id,
+          action_kinds: [...planItemWorkflowQueuedActionKindSchema.options],
+          reason: 'abandon_new_session',
+          now,
+        });
+        await this.performManualDecisionTransitionRecordWithRepository(
+          repository,
+          workflow,
+          this.manualDecisionInput({
+            actor_id: input.actor_id,
+            to_status: fallback.target_status,
+            manual_decision_kind: 'abandon_new_session',
+            reason: input.reason,
+          }),
+        );
+        const replacement = await repository.replaceActiveCodexSessionForWorkflow({
+          workflow_id: workflow.id,
+          previous_session_id: session.id,
+          new_session_id: randomUUID(),
+          ...runtimeBinding,
+          actor_id: input.actor_id,
+          now: this.now(),
+        });
+        const queuedActions =
+          fallback.queued_action_kind === undefined
+            ? []
+            : [
+                await this.enqueueWorkflowAction(repository, replacement.workflow, replacement.session, {
+                  kind: fallback.queued_action_kind,
+                  actor_id: input.actor_id,
+                }),
+              ];
+        return this.toPublicWorkflowDtoWithRepository(
+          repository,
+          replacement.workflow,
+          replacement.session,
+          queuedActions,
+        );
+      }),
+    );
+  }
+
+  private async claimReviewFixCommandIdempotency(
+    repository: DeliveryRepository,
+    input: {
+      workflow: PlanItemWorkflow;
+      session: CodexSession;
+      input: RequestWorkflowReviewFixBodyDto;
+      executionPackage: ExecutionPackage;
+      packageVersion: number;
+      previousRunSessionId: string;
+      currentReviewPacketDigest: string;
+      approvedSpecRevisionId: string;
+      approvedPlanRevisionId: string;
+      inputCapsuleDigest: string;
+      inputContinuity: WorkflowExecutionInputContinuity;
+      runtimeBinding: StartWorkflowExecutionRuntimeBinding;
+      workerSessionDigest: string;
+      idempotencyKey: string;
+      claimToken: string;
+    },
+  ): Promise<CommandIdempotencyRecord> {
+    const now = this.now();
+    const runtimeExpiresAt = new Date(Date.parse(now) + 10 * 60_000).toISOString();
+    const precondition = this.reviewFixCommandPrecondition(input);
+    try {
+      return await repository.claimCommandIdempotency({
+        id: randomUUID(),
+        command_name: 'plan_item_workflow_review_fix',
+        idempotency_key: input.idempotencyKey,
+        target_object_type: 'plan_item_workflow',
+        target_object_id: input.workflow.id,
+        target_revision_id: input.input.expected_review_packet_id,
+        target_version: input.executionPackage.version,
+        precondition_json: precondition,
+        precondition_fingerprint: codexCanonicalDigest(precondition),
+        actor_scope: `actor:${input.input.actor_id}`,
+        claim_token: input.claimToken,
+        locked_until: runtimeExpiresAt,
+        now,
+      });
+    } catch (error) {
+      if (
+        error instanceof DomainError &&
+        error.code === 'INVALID_TRANSITION' &&
+        error.message.includes('already has an active claim')
+      ) {
+        throw new DomainError('workflow_action_already_pending', `workflow_action_already_pending: ${error.message}`);
+      }
+      throw error;
+    }
+  }
+
+  private reviewFixCommandIdempotencyKey(
+    workflow: PlanItemWorkflow,
+    session: CodexSession,
+    executionPackage: ExecutionPackage,
+    input: RequestWorkflowReviewFixBodyDto,
+  ): string {
+    const keyMaterial = input.idempotency_key ?? codexCanonicalDigest({
+      kind: 'plan_item_workflow_review_fix_command',
+      workflow_id: workflow.id,
+      codex_session_id: session.id,
+      execution_package_id: executionPackage.id,
+      expected_review_packet_id: input.expected_review_packet_id,
+      expected_review_packet_digest: input.expected_review_packet_digest,
+      fix_instruction_markdown: input.fix_instruction_markdown ?? null,
+    });
+    return `plan-item-workflow:${workflow.id}:code-review:request-fix:${keyMaterial}`;
+  }
+
+  private reviewFixCommandPrecondition(input: {
+    workflow: PlanItemWorkflow;
+    session: CodexSession;
+    input: RequestWorkflowReviewFixBodyDto;
+    executionPackage: ExecutionPackage;
+    packageVersion: number;
+    previousRunSessionId: string;
+    currentReviewPacketDigest: string;
+    approvedSpecRevisionId: string;
+    approvedPlanRevisionId: string;
+    inputCapsuleDigest: string;
+    inputContinuity: WorkflowExecutionInputContinuity;
+    runtimeBinding: StartWorkflowExecutionRuntimeBinding;
+    workerSessionDigest: string;
+  }): Record<string, unknown> {
+    return {
+      schema_version: 'plan_item_workflow_review_fix_command_precondition.v1',
+      workflow_id: input.workflow.id,
+      codex_session_id: input.session.id,
+      expected_review_packet_id: input.input.expected_review_packet_id,
+      expected_review_packet_digest: input.input.expected_review_packet_digest,
+      current_review_packet_digest: input.currentReviewPacketDigest,
+      fix_instruction_markdown: input.input.fix_instruction_markdown ?? null,
+      execution_package_id: input.executionPackage.id,
+      execution_package_record_version: input.executionPackage.version,
+      execution_package_version: input.packageVersion,
+      execution_package_manifest_digest: input.executionPackage.manifest_digest ?? null,
+      path_policy_digest: codexCanonicalDigest({
+        allowed_paths: input.executionPackage.allowed_paths,
+        forbidden_paths: input.executionPackage.forbidden_paths,
+        source_mutation_policy: input.executionPackage.source_mutation_policy,
+      }),
+      required_checks_digest: codexCanonicalDigest(input.executionPackage.required_checks),
+      previous_run_session_id: input.previousRunSessionId,
+      approved_spec_revision_id: input.approvedSpecRevisionId,
+      approved_implementation_plan_revision_id: input.approvedPlanRevisionId,
+      input_capsule_digest: input.inputCapsuleDigest,
+      input_memory_bundle_digest: input.inputContinuity.input_memory_bundle_digest,
+      input_environment_manifest_digest: input.inputContinuity.input_environment_manifest_digest,
+      runtime_profile_id: input.runtimeBinding.runtime_profile_id,
+      runtime_profile_revision_id: input.runtimeBinding.runtime_profile_revision_id,
+      runtime_profile_digest: input.runtimeBinding.runtime_profile_digest,
+      credential_binding_id: input.runtimeBinding.credential_binding_id,
+      credential_binding_version_id: input.runtimeBinding.credential_binding_version_id,
+      credential_payload_digest: input.runtimeBinding.credential_payload_digest,
+      docker_image_digest: input.runtimeBinding.docker_image_digest,
+      network_policy_digest: input.runtimeBinding.network_policy_digest,
+      network_provider_config_digest: input.runtimeBinding.network_provider_config_digest ?? null,
+      worker_id: input.runtimeBinding.worker.id,
+      worker_session_digest: input.workerSessionDigest,
+    };
+  }
+
+  private assertReviewFixCommandReplayMatchesInput(
+    claim: CommandIdempotencyRecord,
+    workflow: PlanItemWorkflow,
+    session: CodexSession,
+    executionPackage: ExecutionPackage,
+    input: RequestWorkflowReviewFixBodyDto,
+  ): void {
+    const precondition = claim.precondition_json;
+    const mismatched =
+      precondition === undefined ||
+      claim.command_name !== 'plan_item_workflow_review_fix' ||
+      claim.target_object_type !== 'plan_item_workflow' ||
+      claim.target_object_id !== workflow.id ||
+      claim.target_revision_id !== input.expected_review_packet_id ||
+      claim.actor_scope !== `actor:${input.actor_id}` ||
+      precondition.schema_version !== 'plan_item_workflow_review_fix_command_precondition.v1' ||
+      precondition.workflow_id !== workflow.id ||
+      precondition.codex_session_id !== session.id ||
+      precondition.execution_package_id !== executionPackage.id ||
+      precondition.expected_review_packet_id !== input.expected_review_packet_id ||
+      precondition.expected_review_packet_digest !== input.expected_review_packet_digest ||
+      precondition.fix_instruction_markdown !== (input.fix_instruction_markdown ?? null);
+    if (mismatched) {
+      throw new DomainError('workflow_execution_recovery_required', 'Review fix command replay precondition changed');
+    }
+  }
+
+  private async replayReviewFixCommandResult(
+    repository: DeliveryRepository,
+    workflowId: string,
+    claim: CommandIdempotencyRecord | undefined,
+  ): Promise<PlanItemWorkflowPublicDto | undefined> {
+    if (claim === undefined) {
+      return undefined;
+    }
+    if (claim.status === 'running') {
+      return undefined;
+    }
+    const result = claim.result_json;
+    if (claim.status !== 'succeeded' || result === undefined) {
+      throw new DomainError('workflow_execution_recovery_required', 'Review fix command replay requires a completed result');
+    }
+    const workflow = this.requireFound(await repository.getPlanItemWorkflow(workflowId), `PlanItemWorkflow ${workflowId}`);
+    const sessionId = this.commandResultString(result, 'codex_session_id', 'Review fix replay requires a Codex Session id');
+    const executionPackageId = this.commandResultString(
+      result,
+      'execution_package_id',
+      'Review fix replay requires an Execution Package id',
+    );
+    const runSessionId = this.commandResultString(result, 'run_session_id', 'Review fix replay requires a RunSession id');
+    const runtimeJobId = this.commandResultString(result, 'runtime_job_id', 'Review fix replay requires a runtime job id');
+    const executionTurnId = this.commandResultString(result, 'codex_session_turn_id', 'Review fix replay requires an execution turn id');
+    const inputCapsuleDigest = this.commandResultString(result, 'input_capsule_digest', 'Review fix replay requires input capsule digest');
+    const workspaceBundleDigest = this.commandResultString(
+      result,
+      'workspace_bundle_digest',
+      'Review fix replay requires workspace bundle digest',
+    );
+    const codexThreadIdDigest = this.commandResultString(
+      result,
+      'codex_thread_id_digest',
+      'Review fix replay requires Codex thread digest',
+    );
+    const [session, executionPackage, runSession, runtimeJob] = await Promise.all([
+      repository.getCodexSession(sessionId),
+      repository.getExecutionPackage(executionPackageId),
+      repository.getRunSession(runSessionId),
+      repository.getCodexRuntimeJob({ runtime_job_id: runtimeJobId }),
+    ]);
+    if (
+      session === undefined ||
+      executionPackage === undefined ||
+      runSession === undefined ||
+      runtimeJob === undefined ||
+      runSession.workflow_id !== workflow.id ||
+      runSession.codex_session_id !== session.id ||
+      runtimeJob.workflow_id !== workflow.id ||
+      runtimeJob.codex_session_id !== session.id ||
+      runtimeJob.target_id !== runSession.id ||
+      runtimeJob.target_kind !== 'run_execution'
+    ) {
+      throw new DomainError('workflow_execution_recovery_required', 'Review fix command replay lineage is incomplete');
+    }
+    return this.toPublicWorkflowDtoWithRepository(repository, workflow, session, [], {
+      execution_run_summary: this.executionRunSummary({
+        workflow,
+        session,
+        executionPackage,
+        runSessionId,
+        runtimeJobId,
+        executionTurnId,
+        inputCapsuleDigest,
+        workspaceBundleDigest,
+        codexThreadIdDigest,
+        status: runSession.status,
+      }),
+    });
+  }
+
+  private commandResultString(result: Record<string, unknown>, key: string, message: string): string {
+    return this.requireString(typeof result[key] === 'string' ? result[key] : undefined, message);
+  }
+
+  private async blockReviewFixCommandIdempotencyAfterError(
+    repository: DeliveryRepository,
+    claim: CommandIdempotencyRecord,
+    claimToken: string,
+    error: unknown,
+  ): Promise<void> {
+    if (claim.status !== 'running' || claim.claim_token !== claimToken) {
+      return;
+    }
+    try {
+      await repository.blockCommandIdempotency({
+        idempotency_key: claim.idempotency_key,
+        claim_token: claimToken,
+        result_json: {
+          error_code: error instanceof DomainError ? error.code : 'unknown_error',
+          error_message: error instanceof Error ? error.message : String(error),
+        },
+        finished_at: this.now(),
+      });
+    } catch {
+      // Preserve the original domain error; failed claim cleanup is secondary.
+    }
+  }
+
+  private assertReviewFixExecutionPackageOwned(
+    workflow: PlanItemWorkflow,
+    session: CodexSession,
+    executionPackage: ExecutionPackage,
+  ): void {
+    if (
+      executionPackage.workflow_id !== workflow.id ||
+      executionPackage.development_plan_item_id !== workflow.development_plan_item_id ||
+      executionPackage.codex_session_id !== session.id ||
+      executionPackage.spec_revision_id !== workflow.active_spec_doc_revision_id ||
+      executionPackage.execution_plan_revision_id !== workflow.active_implementation_plan_doc_revision_id ||
+      executionPackage.deleted_at !== undefined ||
+      executionPackage.archived_at !== undefined
+    ) {
+      throw new DomainError('workflow_evidence_not_owned', 'Execution Package does not belong to this workflow/session');
+    }
+  }
+
+  private assertReviewFixPreviousRunOwned(
+    workflow: PlanItemWorkflow,
+    session: CodexSession,
+    executionPackage: ExecutionPackage,
+    previousRunSession: RunSession,
+  ): void {
+    if (
+      previousRunSession.workflow_id !== workflow.id ||
+      previousRunSession.codex_session_id !== session.id ||
+      previousRunSession.execution_package_id !== executionPackage.id
+    ) {
+      throw new DomainError('workflow_evidence_not_owned', 'Previous RunSession does not belong to this workflow/session/package');
+    }
+  }
+
+  private assertCodexSessionIdleForReviewCommand(session: CodexSession): void {
+    if (session.status !== 'idle' || session.role !== 'active' || session.active_lease_id !== undefined) {
+      throw new DomainError('workflow_invalid_transition', 'Review command requires an idle active Codex Session');
+    }
+  }
+
+  private async assertNoActiveWorkflowActions(repository: DeliveryRepository, workflowId: string): Promise<void> {
+    const [activeAction] = await repository.listActivePlanItemWorkflowQueuedActions(workflowId);
+    if (activeAction !== undefined) {
+      throw new DomainError(
+        'workflow_action_already_pending',
+        `workflow_action_already_pending: Queued action ${activeAction.id} is ${activeAction.status}`,
+      );
+    }
+  }
+
+  private async createOrReplayRespondToReviewAction(
+    repository: DeliveryRepository,
+    workflow: PlanItemWorkflow,
+    session: CodexSession,
+    input: RespondToWorkflowReviewBodyDto,
+  ): Promise<PlanItemWorkflowQueuedAction> {
+    const contextPreviewDigest = this.contextPreviewDigest(workflow, session, 'respond_to_review');
+    const idempotencyKey = this.respondToReviewActionIdempotencyKey(workflow, session, input);
+    await this.assertNoActiveWorkflowActions(repository, workflow.id);
+    const now = this.now();
+    return repository.createOrReplayPlanItemWorkflowQueuedAction({
+      id: randomUUID(),
+      workflow_id: workflow.id,
+      codex_session_id: session.id,
+      kind: 'respond_to_review',
+      status: 'queued',
+      ...(session.latest_capsule_digest === undefined ? {} : { expected_input_capsule_digest: session.latest_capsule_digest }),
+      context_preview_digest: contextPreviewDigest,
+      idempotency_key: idempotencyKey,
+      created_by_actor_id: input.actor_id,
+      created_at: now,
+      updated_at: now,
+    });
+  }
+
+  private respondToReviewActionIdempotencyKey(
+    workflow: PlanItemWorkflow,
+    session: CodexSession,
+    input: RespondToWorkflowReviewBodyDto,
+  ): string {
+    return codexCanonicalDigest({
+      kind: 'plan_item_workflow_respond_to_review_command',
+      workflow_id: workflow.id,
+      codex_session_id: session.id,
+      expected_review_packet_id: input.expected_review_packet_id,
+      expected_review_packet_digest: input.expected_review_packet_digest,
+      response_prompt_markdown: input.response_prompt_markdown ?? null,
+      request_idempotency_key: input.idempotency_key ?? null,
+    });
+  }
+
+  private async respondToReviewReplayActionOrThrow(
+    repository: DeliveryRepository,
+    workflow: PlanItemWorkflow,
+    session: CodexSession,
+    input: RespondToWorkflowReviewBodyDto,
+  ): Promise<PlanItemWorkflowQueuedAction | undefined> {
+    const idempotencyKey = this.respondToReviewActionIdempotencyKey(workflow, session, input);
+    const activeActions = await repository.listActivePlanItemWorkflowQueuedActions(workflow.id);
+    const replayableAction = activeActions.find(
+      (action) =>
+        action.idempotency_key === idempotencyKey &&
+        action.kind === 'respond_to_review' &&
+        action.codex_session_id === session.id,
+    );
+    if (replayableAction !== undefined) {
+      return replayableAction;
+    }
+    const historicalReplayAction = (await repository.listPlanItemWorkflowQueuedActions(workflow.id)).find(
+      (action) =>
+        action.idempotency_key === idempotencyKey &&
+        action.kind === 'respond_to_review' &&
+        action.codex_session_id === session.id,
+    );
+    if (historicalReplayAction !== undefined) {
+      return historicalReplayAction;
+    }
+    const [conflictingAction] = activeActions;
+    if (conflictingAction !== undefined) {
+      throw new DomainError(
+        'workflow_action_already_pending',
+        `workflow_action_already_pending: Queued action ${conflictingAction.id} is ${conflictingAction.status}`,
+      );
+    }
+    return undefined;
+  }
+
+  private async claimReviewCommandAction(
+    repository: DeliveryRepository,
+    workflow: PlanItemWorkflow,
+    session: CodexSession,
+    action: PlanItemWorkflowQueuedAction,
+  ): Promise<PlanItemWorkflowQueuedAction> {
+    assertQueuedActionCanRun({
+      action,
+      workflow_id: workflow.id,
+      active_codex_session_id: session.id,
+      ...(session.latest_capsule_digest === undefined ? {} : { latest_capsule_digest: session.latest_capsule_digest }),
+      context_preview_digest: this.contextPreviewDigest(workflow, session, action.kind),
+    });
+    return (
+      await repository.claimOrReplayPlanItemWorkflowQueuedActionRun({
+        workflow_id: workflow.id,
+        action_id: action.id,
+        now: this.now(),
+      })
+    ).action;
+  }
+
+  private async attachReviewCommandTurn(
+    repository: DeliveryRepository,
+    workflow: PlanItemWorkflow,
+    session: CodexSession,
+    action: PlanItemWorkflowQueuedAction,
+    actorId: string,
+  ): Promise<PlanItemWorkflowQueuedAction> {
+    const turn = await this.createWorkflowChildTurn(
+      repository,
+      workflow,
+      session,
+      actorId,
+      mapQueuedActionKindToTurnIntent(action.kind),
+      `queued-action:${action.kind}:${action.id}`,
+    );
+    return repository.attachPlanItemWorkflowQueuedActionTurn({
+      workflow_id: workflow.id,
+      action_id: action.id,
+      codex_session_turn_id: turn.id,
+      now: this.now(),
+    });
+  }
+
+  private isTerminalRunSession(runSession: RunSession): boolean {
+    return ['succeeded', 'failed', 'cancelled', 'timed_out'].includes(runSession.status);
+  }
+
+  private reviewFixSucceededReviewResponse(input: {
+    response: ReviewResponse | undefined;
+    workflow: PlanItemWorkflow;
+    session: CodexSession;
+    currentReviewPacket: ReviewPacket;
+    previousRunSession: RunSession;
+  }): ReviewResponse | undefined {
+    const { response, workflow, session, currentReviewPacket, previousRunSession } = input;
+    if (
+      response === undefined ||
+      response.status !== 'succeeded' ||
+      response.workflow_id !== workflow.id ||
+      response.codex_session_id !== session.id ||
+      response.review_packet_id !== currentReviewPacket.id ||
+      response.previous_run_session_id !== previousRunSession.id
+    ) {
+      return undefined;
+    }
+    return response;
+  }
+
+  private async startReviewFixExecution(
+    repository: DeliveryRepository,
+    input: {
+      workflow: PlanItemWorkflow;
+      session: CodexSession;
+      executionPackage: ExecutionPackage;
+      previousRunSession: RunSession;
+      currentReviewPacket: { packet: ReviewPacket; evidenceRefs: ReviewPacketEvidenceRef[]; digest: string };
+      inputCapsule: CodexRuntimeCapsule;
+      inputContinuity: WorkflowExecutionInputContinuity;
+      runtimeBinding: StartWorkflowExecutionRuntimeBinding;
+      workerSessionDigest: string;
+      actorId: string;
+      fixInstructionMarkdown?: string;
+    },
+  ): Promise<{
+    workflow: PlanItemWorkflow;
+    session: CodexSession;
+    executionPackage: ExecutionPackage;
+    turn: CodexSessionTurn;
+    runSession: RunSession;
+    runtimeJob: CodexRuntimeJob;
+    inputCapsuleDigest: string;
+    workspaceBundleDigest: string;
+  }> {
+    const {
+      workflow,
+      session,
+      executionPackage,
+      previousRunSession,
+      currentReviewPacket,
+      inputCapsule,
+      inputContinuity,
+      runtimeBinding,
+      workerSessionDigest,
+      actorId,
+    } = input;
+    const now = this.now();
+    const runtimeExpiresAt = new Date(Date.parse(now) + 10 * 60_000).toISOString();
+    const executionTurn = await this.createWorkflowChildTurn(
+      repository,
+      workflow,
+      session,
+      actorId,
+      'fix_review_feedback',
+      `request-review-fix:${currentReviewPacket.packet.id}:${input.fixInstructionMarkdown ?? 'default'}`,
+    );
+    const runSessionId = randomUUID();
+    const runtimeJobId = randomUUID();
+    const launchLeaseId = randomUUID();
+    const envelopeId = randomUUID();
+    const leaseToken = `codex-session-review-fix:${randomUUID()}`;
+    const runWorkerLeaseToken = `run-worker-review-fix:${randomUUID()}`;
+    const packageVersionForReview = executionPackage.execution_package_version ?? executionPackage.version;
+    const queuedPackage =
+      executionPackage.phase === 'ready'
+        ? transitionExecutionPackage(executionPackage, { type: 'run', run_session_id: runSessionId, at: now })
+        : transitionExecutionPackage(executionPackage, {
+            type: 'force_rerun',
+            run_session_id: runSessionId,
+            has_open_review_packet: true,
+            at: now,
+          });
+    const runningPackage = transitionExecutionPackage(queuedPackage, { type: 'workflow_start', at: now });
+    const pathPolicyDigest = codexCanonicalDigest({
+      allowed_paths: runningPackage.allowed_paths,
+      forbidden_paths: runningPackage.forbidden_paths,
+      source_mutation_policy: runningPackage.source_mutation_policy,
+    });
+    const latestReviewResponse = await repository.getLatestReviewResponseForWorkflow(workflow.id);
+    const reviewResponseForFix = this.reviewFixSucceededReviewResponse({
+      response: latestReviewResponse,
+      workflow,
+      session,
+      currentReviewPacket: currentReviewPacket.packet,
+      previousRunSession,
+    });
+    const reviewResponseIds = reviewResponseForFix === undefined ? [] : [reviewResponseForFix.id];
+    const reviewContext: RunSpec['review_context'] = {
+      latest_decision: 'changes_requested',
+      review_packet_id: currentReviewPacket.packet.id,
+      review_packet_digest: currentReviewPacket.digest,
+      previous_run_session_id: previousRunSession.id,
+      approved_spec_revision_id: this.requireString(workflow.active_spec_doc_revision_id, 'Workflow approved Spec Doc is missing'),
+      approved_implementation_plan_revision_id: this.requireString(
+        workflow.active_implementation_plan_doc_revision_id,
+        'Workflow approved Implementation Plan Doc is missing',
+      ),
+      execution_package_id: runningPackage.id,
+      execution_package_version: packageVersionForReview,
+      path_policy_digest: pathPolicyDigest,
+      required_checks: runningPackage.required_checks.map((check) => ({ ...check })),
+      evidence_refs: [...currentReviewPacket.evidenceRefs]
+        .sort((left, right) => left.digest.localeCompare(right.digest) || left.id.localeCompare(right.id))
+        .map((ref) => ({
+          id: ref.id,
+          ref_kind: ref.ref_kind,
+          display_text: ref.display_text,
+          digest: ref.digest,
+        })),
+      review_response_ids: reviewResponseIds,
+      requested_changes: currentReviewPacket.packet.requested_changes.map((change) => ({ ...change })),
+    };
+    const signedContextJson = {
+      schema_version: 'review_fix_context.v1',
+      plan_item_workflow_id: workflow.id,
+      review_packet_id: currentReviewPacket.packet.id,
+      review_packet_digest: currentReviewPacket.digest,
+      review_packet_summary: currentReviewPacket.packet.summary,
+      risk_notes: currentReviewPacket.packet.risk_notes,
+      requested_changes: reviewContext.requested_changes,
+      evidence_refs: reviewContext.evidence_refs,
+      review_response_ids: reviewContext.review_response_ids,
+      previous_run_session_id: previousRunSession.id,
+      previous_run_session_status: previousRunSession.status,
+      previous_run_session_summary: previousRunSession.summary ?? null,
+      approved_spec_revision_id: reviewContext.approved_spec_revision_id,
+      approved_implementation_plan_revision_id: reviewContext.approved_implementation_plan_revision_id,
+      execution_package_id: runningPackage.id,
+      execution_package_version: packageVersionForReview,
+      path_policy_digest: pathPolicyDigest,
+      required_checks: reviewContext.required_checks,
+      check_strategy: runningPackage.required_checks.map((check) => ({
+        check_id: check.check_id,
+        command: check.command,
+        blocks_review: check.blocks_review,
+      })),
+      ...(input.fixInstructionMarkdown === undefined ? {} : { fix_instruction_markdown: input.fixInstructionMarkdown }),
+    };
+    const runSession = transitionRunSession(undefined, {
+      type: 'create',
+      id: runSessionId,
+      execution_package_id: runningPackage.id,
+      requested_by_actor_id: actorId,
+      executor_type: 'local_codex',
+      at: now,
+    });
+    await repository.saveExecutionPackage(runningPackage);
+    await repository.saveRunSession({
+      ...runSession,
+      workflow_id: workflow.id,
+      codex_session_id: session.id,
+      codex_session_turn_id: executionTurn.id,
+      executor_type: 'local_codex',
+    });
+    const runContext = await loadRunContext(repository, runSessionId);
+    const runSpec = runSpecSchema.parse({
+      run_session_id: runSessionId,
+      execution_package_id: runningPackage.id,
+      project_id: runningPackage.project_id,
+      expected_package_version: runningPackage.version,
+      work_item_id: runningPackage.work_item_id,
+      spec_revision_id: runContext.specRevision.id,
+      plan_revision_id: runContext.planRevision.id,
+      executor_type: 'local_codex',
+      repo: {
+        repo_id: runContext.projectRepo.repo_id,
+        local_path: runContext.projectRepo.local_path,
+        base_branch: runContext.projectRepo.default_branch,
+        base_commit_sha: runContext.projectRepo.base_commit_sha,
+      },
+      objective: runningPackage.objective,
+      context: {
+        spec_revision_summary: runContext.specRevision.summary,
+        plan_revision_summary: runContext.planRevision.summary,
+        package_instructions: runningPackage.objective,
+        required_checks: runningPackage.required_checks.map((check) => ({ ...check })),
+      },
+      review_context: reviewContext,
+      workflow_only: previousRunSession.run_spec?.workflow_only ?? false,
+      source_mutation_policy: runningPackage.source_mutation_policy,
+      allowed_paths: [...runningPackage.allowed_paths],
+      forbidden_paths: [...runningPackage.forbidden_paths],
+      required_checks: runningPackage.required_checks.map((check) => ({ ...check })),
+      artifact_policy: {
+        requested_artifacts: [...new Set([...runningPackage.required_artifact_kinds, ...reviewFixBaseRequestedArtifacts])],
+      },
+      timeout_seconds: previousRunSession.run_spec?.timeout_seconds ?? 3600,
+      idempotency_key: runSessionId,
+    });
+    await repository.saveRunSession({
+      ...runSession,
+      workflow_id: workflow.id,
+      codex_session_id: session.id,
+      codex_session_turn_id: executionTurn.id,
+      executor_type: 'local_codex',
+      run_spec: runSpec,
+    });
+    await repository.saveRunSessionAttemptLineage({
+      run_session_id: runSessionId,
+      workflow_id: workflow.id,
+      codex_session_id: session.id,
+      attempt_kind: 'review_fix',
+      previous_run_session_id: previousRunSession.id,
+      previous_review_packet_id: currentReviewPacket.packet.id,
+      ...(reviewResponseForFix === undefined ? {} : { review_response_id: reviewResponseForFix.id }),
+      created_by_actor_id: actorId,
+      created_at: now,
+    });
+    const workflowExecutionPayload = this.workflowExecutionPayload(runningPackage, this.workflowExecutionRemoteRunSpec(runSpec));
+    const workspaceBundle = this.workflowExecutionWorkspaceBundle(now, workflowExecutionPayload);
+    await repository.saveRunSession({
+      ...runSession,
+      workflow_id: workflow.id,
+      codex_session_id: session.id,
+      codex_session_turn_id: executionTurn.id,
+      executor_type: 'local_codex',
+      run_spec: runSpec,
+      runtime_metadata: {
+        durability_mode: 'durable',
+        driver_kind: 'app_server',
+        driver_status: 'not_started',
+        recovery_attempt_count: 0,
+        effective_dangerous_mode: 'confirmed',
+        runtime_profile_id: runtimeBinding.runtime_profile_id,
+        runtime_profile_revision_id: runtimeBinding.runtime_profile_revision_id,
+        runtime_profile_digest: runtimeBinding.runtime_profile_digest,
+        runtime_target_kind: 'run_execution',
+        source_access_mode: 'path_policy_scoped',
+        environment: runtimeBinding.environment,
+        credential_binding_id: runtimeBinding.credential_binding_id,
+        credential_binding_version_id: runtimeBinding.credential_binding_version_id,
+        credential_payload_digest: runtimeBinding.credential_payload_digest,
+        launch_lease_id: launchLeaseId,
+        docker_image_digest: runtimeBinding.docker_image_digest,
+        network_policy_digest: runtimeBinding.network_policy_digest,
+        ...(runtimeBinding.network_provider_config_digest === undefined
+          ? {}
+          : { network_provider_config_digest: runtimeBinding.network_provider_config_digest }),
+        remote_runtime_job_id: runtimeJobId,
+        remote_runtime_job_created: true,
+        remote_workspace_bundle_digest: workspaceBundle.archive_digest,
+        remote_workspace_manifest_digest: workspaceBundle.manifest_digest,
+        remote_workspace_bundle_size_bytes: workspaceBundle.bytes.byteLength,
+        remote_workspace_bundle_expires_at: runtimeExpiresAt,
+      },
+    });
+    const runWorkerLease = await repository.claimRunWorkerLease({
+      run_session_id: runSessionId,
+      worker_id: runtimeBinding.worker.id,
+      lease_token: runWorkerLeaseToken,
+      now,
+      expires_at: runtimeExpiresAt,
+    });
+    const codexLease = await repository.claimCodexSessionLease({
+      session_id: session.id,
+      workflow_id: workflow.id,
+      lease_id: randomUUID(),
+      lease_token_hash: codexCredentialPayloadDigest(leaseToken),
+      worker_id: runtimeBinding.worker.id,
+      worker_session_digest: workerSessionDigest,
+      expected_input_capsule_digest: inputCapsule.digest,
+      input_capsule_id: inputCapsule.id,
+      input_capsule_digest: inputCapsule.digest,
+      ...(session.base_memory_bundle_ref === undefined ? {} : { base_memory_bundle_ref: session.base_memory_bundle_ref }),
+      ...(session.base_memory_bundle_digest === undefined ? {} : { base_memory_bundle_digest: session.base_memory_bundle_digest }),
+      ...inputContinuity,
+      now,
+      expires_at: runtimeExpiresAt,
+    });
+    const pendingWorkspaceBundleRef = `artifact://internal/workspace_bundle/run_session/${runSessionId}/${workspaceBundle.id}`;
+    const workspaceAcquisition = {
+      schema_version: 'workspace_bundle_acquisition.v1' as const,
+      bundle_id: workspaceBundle.id,
+      archive_ref: pendingWorkspaceBundleRef,
+      archive_digest: workspaceBundle.archive_digest,
+      manifest_digest: workspaceBundle.manifest_digest,
+      size_bytes: workspaceBundle.bytes.byteLength,
+      expires_at: runtimeExpiresAt,
+    };
+    const workspaceAcquisitionDigest = this.requireString(
+      codexWorkspaceAcquisitionDigest(workspaceAcquisition),
+      'Workspace acquisition digest missing',
+    );
+    const workload: CodexRunExecutionWorkloadV1 = validateCodexRunExecutionWorkload({
+      schema_version: 'codex_run_execution_workload.v1',
+      runtime_job_id: runtimeJobId,
+      plan_item_workflow_id: workflow.id,
+      development_plan_id: workflow.development_plan_id,
+      development_plan_item_id: workflow.development_plan_item_id,
+      run_session_id: runSessionId,
+      execution_package_id: runningPackage.id,
+      execution_package_version: runningPackage.version,
+      workspace_bundle_id: workspaceBundle.id,
+      workspace_bundle_digest: workspaceBundle.archive_digest,
+      package_prompt_ref: `artifact://codex-runtime-jobs/${runtimeJobId}/workload/package-prompt`,
+      package_prompt_digest: codexCanonicalDigest(workflowExecutionPayload.packagePrompt),
+      execution_context_ref: `artifact://codex-runtime-jobs/${runtimeJobId}/workload/execution-context`,
+      execution_context_digest: codexCanonicalDigest(workflowExecutionPayload.executionContext),
+      path_policy_digest: pathPolicyDigest,
+      required_checks_digest: codexCanonicalDigest(runningPackage.required_checks),
+      previous_run_session_id: previousRunSession.id,
+      previous_review_packet_id: currentReviewPacket.packet.id,
+      review_packet_digest: currentReviewPacket.digest,
+      signed_context_json: signedContextJson,
+      output_schema_version: 'codex_run_execution_result.v1',
+      created_at: now,
+      expires_at: runtimeExpiresAt,
+      workspace_acquisition_json: workspaceAcquisition,
+      codex_session_runtime_context: {
+        schema_version: 'codex_session_runtime_context.v1',
+        codex_session_id: session.id,
+        codex_session_turn_id: executionTurn.id,
+        lease_id: launchLeaseId,
+        lease_epoch: codexLease.lease.lease_epoch,
+        worker_id: runtimeBinding.worker.id,
+        worker_session_digest: workerSessionDigest,
+        expected_input_capsule_digest: inputCapsule.digest,
+        turn_group_status: 'complete',
+        continuation: {
+          kind: 'resume_thread',
+          codex_thread_id: this.requireString(session.codex_thread_id, 'Review fix requires a Codex thread id'),
+          codex_thread_id_digest: this.requireString(session.codex_thread_id_digest, 'Review fix requires a Codex thread id digest'),
+        },
+      },
+      codex_session_terminalization: {
+        schema_version: 'codex_session_terminalization.v1',
+        lease_token: leaseToken,
+        codex_session_lease_id: codexLease.lease.id,
+        codex_session_lease_epoch: codexLease.lease.lease_epoch,
+        codex_session_worker_id: runtimeBinding.worker.id,
+        codex_session_worker_session_digest: workerSessionDigest,
+        codex_session_id: session.id,
+        codex_session_turn_id: executionTurn.id,
+        expected_input_capsule_digest: inputCapsule.digest,
+        input_capsule_id: inputCapsule.id,
+        input_capsule_ref: inputCapsule.artifact_ref,
+        input_capsule_digest: inputCapsule.digest,
+        ...(session.base_memory_bundle_ref === undefined ? {} : { base_memory_bundle_ref: session.base_memory_bundle_ref }),
+        ...(session.base_memory_bundle_digest === undefined ? {} : { base_memory_bundle_digest: session.base_memory_bundle_digest }),
+        ...inputContinuity,
+      },
+    });
+    const workspaceBundleArtifact = await new LocalInternalArtifactStore({
+      root: this.internalArtifactStoreRoot,
+      repository,
+      requestId: `plan-item-workflow-review-fix-${workflow.id}`,
+    }).putObject({
+      artifact_id: workspaceBundle.id,
+      kind: 'workspace_bundle',
+      owner_type: 'run_session',
+      owner_id: runSessionId,
+      visibility: 'internal',
+      content_type: 'application/vnd.forgeloop.workspace-bundle',
+      declared_size_bytes: String(workspaceBundle.bytes.byteLength),
+      declared_artifact_digest: workspaceBundle.archive_digest,
+      idempotency_key: workspaceBundle.id,
+      metadata_json: {
+        manifest_digest: workspaceBundle.manifest_digest,
+        execution_package_id: runningPackage.id,
+        run_worker_lease_id: runWorkerLease.id,
+        workspace_acquisition_digest: workspaceAcquisitionDigest,
+        review_packet_id: currentReviewPacket.packet.id,
+        review_packet_digest: currentReviewPacket.digest,
+        signed_context_digest: codexCanonicalDigest(signedContextJson),
+      },
+      created_by_actor_type: 'system',
+      created_by_actor_id: actorId,
+      now,
+      max_size_bytes: 100 * 1024 * 1024,
+      bytes: workspaceBundle.bytes,
+    });
+    const pendingWorkspaceBundle = {
+      id: randomUUID(),
+      bundle_id: workspaceBundle.id,
+      run_session_id: runSessionId,
+      execution_package_id: runningPackage.id,
+      pending_artifact_ref: pendingWorkspaceBundleRef,
+      internal_artifact_object_id: workspaceBundleArtifact.id,
+      archive_digest: workspaceBundle.archive_digest,
+      manifest_digest: workspaceBundle.manifest_digest,
+      run_worker_lease_id: runWorkerLease.id,
+      size_bytes: workspaceBundle.bytes.byteLength,
+      workspace_acquisition_digest: workspaceAcquisitionDigest,
+      workspace_acquisition_json: workspaceAcquisition,
+      expires_at: runtimeExpiresAt,
+      request_digest: codexCanonicalDigest({
+        runtime_job_id: runtimeJobId,
+        workspace_bundle_id: workspaceBundle.id,
+        archive_digest: workspaceBundle.archive_digest,
+        internal_artifact_object_id: workspaceBundleArtifact.id,
+      }),
+      created_at: now,
+    };
+    await repository.createPendingWorkspaceBundleArtifact(pendingWorkspaceBundle);
+    const runtimeJobResult = await repository.createOrReplayCodexRuntimeJobWithLeaseAndEnvelope({
+      runtime_job_id: runtimeJobId,
+      launch_lease_id: launchLeaseId,
+      envelope_id: envelopeId,
+      job_request_id: codexCanonicalDigest({
+        kind: 'plan_item_workflow_review_fix',
+        workflow_id: workflow.id,
+        run_session_id: runSessionId,
+        previous_run_session_id: previousRunSession.id,
+        previous_review_packet_id: currentReviewPacket.packet.id,
+      }),
+      target: {
+        target_type: 'run_session',
+        target_id: runSessionId,
+        target_kind: 'run_execution',
+        project_id: runningPackage.project_id,
+        repo_id: runningPackage.repo_id,
+      },
+      launch_attempt: 1,
+      worker_id: runtimeBinding.worker.id,
+      runtime_profile_revision_id: runtimeBinding.runtime_profile_revision_id,
+      runtime_profile_digest: runtimeBinding.runtime_profile_digest,
+      credential_binding_id: runtimeBinding.credential_binding_id,
+      credential_binding_version_id: runtimeBinding.credential_binding_version_id,
+      credential_payload_digest: runtimeBinding.credential_payload_digest,
+      docker_image_digest: runtimeBinding.docker_image_digest,
+      network_policy_digest: runtimeBinding.network_policy_digest,
+      ...(runtimeBinding.network_provider_config_digest === undefined
+        ? {}
+        : { network_provider_config_digest: runtimeBinding.network_provider_config_digest }),
+      input_json: workload as unknown as Record<string, unknown>,
+      input_digest: codexRuntimeJobInputDigest(workload),
+      workspace_acquisition_json: workspaceAcquisition,
+      workspace_acquisition_digest: workspaceAcquisitionDigest,
+      pending_workspace_bundle: pendingWorkspaceBundle,
+      execution_package_id: runningPackage.id,
+      run_worker_lease_id: runWorkerLease.id,
+      run_worker_lease_token_hash: codexCredentialPayloadDigest(runWorkerLeaseToken),
+      run_session_status: runSession.status,
+      run_session_updated_at: runSession.updated_at,
+      execution_package_version: runningPackage.version,
+      workflow_id: workflow.id,
+      codex_session_id: session.id,
+      codex_session_turn_id: executionTurn.id,
+      expires_at: runtimeExpiresAt,
+      now,
+    });
+    await this.writeWorkflowExecutionStartAudit(repository, {
+      workflow,
+      session,
+      executionPackage: runningPackage,
+      runSessionId,
+      runtimeJobId,
+      executionTurnId: executionTurn.id,
+      inputCapsuleDigest: inputCapsule.digest,
+      repoBindingId: runContext.projectRepo.id,
+      credentialBindingId: runtimeBinding.credential_binding_id,
+      credentialBindingVersionId: runtimeBinding.credential_binding_version_id,
+      workspaceBundleDigest: workspaceBundle.archive_digest,
+      codexThreadIdDigest: this.requireString(session.codex_thread_id_digest, 'Review fix requires a Codex thread id digest'),
+      status: runSession.status,
+    }, actorId, `review-packet:${currentReviewPacket.packet.id}`, now);
+    const transitionInput: WorkflowTransitionCommandDto = {
+      actor_id: actorId,
+      to_status: 'execution_running',
+      evidence_object_type: 'run_session',
+      evidence_object_id: runSessionId,
+      codex_session_turn_id: executionTurn.id,
+      supporting_evidence: [{ object_type: 'review_packet', object_id: currentReviewPacket.packet.id, digest: currentReviewPacket.digest }],
+      reason: 'Review fix execution requested.',
+    };
+    await this.validateTransitionEvidence(repository, workflow, transitionInput);
+    const updatedWorkflow = await this.applyTransition(repository, workflow, transitionInput, session.id, now);
+    const persistedRunSession = this.requireFound(await repository.getRunSession(runSessionId), `RunSession ${runSessionId}`);
+    const persistedSession = (await repository.getCodexSession(session.id)) ?? codexLease.session ?? session;
+    return {
+      workflow: updatedWorkflow,
+      session: persistedSession,
+      executionPackage: runningPackage,
+      turn: executionTurn,
+      runSession: persistedRunSession,
+      runtimeJob: runtimeJobResult.runtime_job,
+      inputCapsuleDigest: inputCapsule.digest,
+      workspaceBundleDigest: workspaceBundle.archive_digest,
+    };
+  }
+
+  private async classifyExecutionContinuation(
+    repository: DeliveryRepository,
+    input: {
+      workflow: PlanItemWorkflow;
+      session: CodexSession;
+      executionPackage: ExecutionPackage;
+      runSession: RunSession;
+      runtimeJob: CodexRuntimeJob;
+      input: ContinueWorkflowExecutionBodyDto;
+    },
+  ): Promise<ContinuationDecision> {
+    const { workflow, session, executionPackage, runSession, runtimeJob } = input;
+    if (!this.workflowExecutionRuntimeTargetMatches({ workflow, session, executionPackage, runSession, runtimeJob })) {
+      return { mode: 'reject', code: 'workflow_execution_recovery_required' };
+    }
+    const now = this.now();
+    const codexSessionLease = await this.resolveRuntimeJobCodexSessionLeaseForContinuation(repository, session, runtimeJob);
+    const runWorkerLease = await repository.getRunWorkerLease(runSession.id);
+    const launchLease = await repository.getCodexLaunchLeasePublicStatus({ launch_lease_id: runtimeJob.launch_lease_id });
+    const runtimeJobActive = codexRuntimeJobIsActive(runtimeJob);
+    const activeRuntimeJobLineageValid =
+      this.runtimeJobInputCapsuleDigestMatchesSession(runtimeJob, session) &&
+      (await this.runtimeJobTurnIsRunning(repository, runSession, runtimeJob));
+    const leasesActive =
+      codexSessionLease !== undefined &&
+      this.codexSessionLeaseIsActive(codexSessionLease, session, runtimeJob, now) &&
+      runWorkerLease !== undefined &&
+      this.runWorkerLeaseIsActive(runWorkerLease, runtimeJob, now) &&
+      launchLease !== undefined &&
+      this.codexLaunchLeaseIsActive(launchLease, runtimeJob, now);
+
+    if (runSession.status === 'waiting_for_input') {
+      if (runtimeJob.status === 'running' && leasesActive && activeRuntimeJobLineageValid) {
+        return { mode: 'existing_job_input', runSession, runtimeJob, codexSessionLease, runWorkerLease, launchLease };
+      }
+      if (runtimeJob.status === 'running' && leasesActive) {
+        return { mode: 'reject', code: 'workflow_execution_recovery_required' };
+      }
+      return { mode: 'reject', code: 'workflow_execution_not_ready_for_input' };
+    }
+
+    if (runSession.status === 'resuming') {
+      if (runtimeJobActive && leasesActive && activeRuntimeJobLineageValid) {
+        return { mode: 'replay_current_continuation', runSession, runtimeJob, codexSessionLease, runWorkerLease, launchLease };
+      }
+      if (runtimeJobActive && leasesActive) {
+        return { mode: 'reject', code: 'workflow_execution_recovery_required' };
+      }
+      const previousCodexSessionLease = await this.recoverExpiredCodexSessionLeaseForContinuation(repository, {
+        workflow,
+        session,
+        lease: codexSessionLease,
+        now,
+      });
+      if (
+        runtimeJob.status === 'terminal' &&
+        previousCodexSessionLease !== undefined &&
+        this.runWorkerLeaseIsRecoverable(runWorkerLease, now)
+      ) {
+        return {
+          mode: 'relaunch_after_fencing',
+          runSession,
+          previousRuntimeJob: runtimeJob,
+          previousCodexSessionLease,
+          ...(runWorkerLease === undefined ? {} : { previousRunWorkerLease: runWorkerLease }),
+        };
+      }
+      return { mode: 'reject', code: 'workflow_execution_recovery_required' };
+    }
+
+    if (runSession.status === 'stalled') {
+      if (runtimeJob.status !== 'terminal') {
+        return { mode: 'reject', code: 'workflow_execution_writer_still_active' };
+      }
+      const previousCodexSessionLease = await this.recoverExpiredCodexSessionLeaseForContinuation(repository, {
+        workflow,
+        session,
+        lease: codexSessionLease,
+        now,
+      });
+      if (previousCodexSessionLease === undefined) {
+        return { mode: 'reject', code: 'workflow_execution_writer_still_active' };
+      }
+      if (!this.runWorkerLeaseIsRecoverable(runWorkerLease, now)) {
+        return { mode: 'reject', code: 'workflow_execution_writer_still_active' };
+      }
+      return {
+        mode: 'relaunch_after_fencing',
+        runSession,
+        previousRuntimeJob: runtimeJob,
+        previousCodexSessionLease,
+        ...(runWorkerLease === undefined ? {} : { previousRunWorkerLease: runWorkerLease }),
+      };
+    }
+
+    if (runSession.status === 'cancel_requested') {
+      if (
+        input.input.cancel_recovery_decision !== 'recover_instead_of_accept_cancel' ||
+        input.input.cancel_recovery_confirmation_phrase !== 'recover cancelled execution'
+      ) {
+        return { mode: 'reject', code: 'workflow_execution_cancel_pending' };
+      }
+      const turn =
+        runSession.codex_session_turn_id === undefined ? undefined : await repository.getCodexSessionTurn(runSession.codex_session_turn_id);
+      if (
+        runtimeJobActive ||
+        (codexSessionLease !== undefined && this.codexSessionLeaseCanStillTerminalize(codexSessionLease, session, runtimeJob, now)) ||
+        (runWorkerLease !== undefined && this.runWorkerLeaseIsActive(runWorkerLease, runtimeJob, now)) ||
+        (launchLease !== undefined && this.codexLaunchLeaseIsActive(launchLease, runtimeJob, now)) ||
+        (turn?.status !== 'cancelled' && turn?.status !== 'stale')
+      ) {
+        return { mode: 'reject', code: 'workflow_execution_cancel_pending' };
+      }
+      const previousCodexSessionLease = await this.recoverExpiredCodexSessionLeaseForContinuation(repository, {
+        workflow,
+        session,
+        lease: codexSessionLease,
+        now,
+      });
+      if (
+        runtimeJob.status !== 'terminal' ||
+        previousCodexSessionLease === undefined ||
+        !this.runWorkerLeaseIsRecoverable(runWorkerLease, now)
+      ) {
+        return { mode: 'reject', code: 'workflow_execution_cancel_pending' };
+      }
+      return {
+        mode: 'relaunch_after_fencing',
+        runSession,
+        previousRuntimeJob: runtimeJob,
+        previousCodexSessionLease,
+        ...(runWorkerLease === undefined ? {} : { previousRunWorkerLease: runWorkerLease }),
+        cancelRecovery: true,
+      };
+    }
+
+    return { mode: 'reject', code: 'workflow_execution_not_ready_for_input' };
+  }
+
+  private async classifyExecutionContinuationReadOnly(
+    repository: DeliveryRepository,
+    input: {
+      workflow: PlanItemWorkflow;
+      session: CodexSession;
+      executionPackage: ExecutionPackage;
+      runSession: RunSession;
+      runtimeJob: CodexRuntimeJob;
+    },
+  ): Promise<ContinuationDecision> {
+    const { workflow, session, executionPackage, runSession, runtimeJob } = input;
+    if (!this.workflowExecutionRuntimeTargetMatches({ workflow, session, executionPackage, runSession, runtimeJob })) {
+      return { mode: 'reject', code: 'workflow_execution_recovery_required' };
+    }
+    const now = this.now();
+    const codexSessionLease = await this.resolveRuntimeJobCodexSessionLeaseForContinuation(repository, session, runtimeJob);
+    const runWorkerLease = await repository.getRunWorkerLease(runSession.id);
+    const launchLease = await repository.getCodexLaunchLeasePublicStatus({ launch_lease_id: runtimeJob.launch_lease_id });
+    const runtimeJobActive = codexRuntimeJobIsActive(runtimeJob);
+    const activeRuntimeJobLineageValid =
+      this.runtimeJobInputCapsuleDigestMatchesSession(runtimeJob, session) &&
+      (await this.runtimeJobTurnIsRunning(repository, runSession, runtimeJob));
+    const leasesActive =
+      codexSessionLease !== undefined &&
+      this.codexSessionLeaseIsActive(codexSessionLease, session, runtimeJob, now) &&
+      runWorkerLease !== undefined &&
+      this.runWorkerLeaseIsActive(runWorkerLease, runtimeJob, now) &&
+      launchLease !== undefined &&
+      this.codexLaunchLeaseIsActive(launchLease, runtimeJob, now);
+
+    if (runSession.status === 'waiting_for_input') {
+      if (runtimeJob.status === 'running' && leasesActive && activeRuntimeJobLineageValid) {
+        return { mode: 'existing_job_input', runSession, runtimeJob, codexSessionLease, runWorkerLease, launchLease };
+      }
+      if (runtimeJob.status === 'running' && leasesActive) {
+        return { mode: 'reject', code: 'workflow_execution_recovery_required' };
+      }
+      return { mode: 'reject', code: 'workflow_execution_not_ready_for_input' };
+    }
+
+    if (runSession.status === 'resuming') {
+      if (runtimeJobActive && leasesActive && activeRuntimeJobLineageValid) {
+        return { mode: 'replay_current_continuation', runSession, runtimeJob, codexSessionLease, runWorkerLease, launchLease };
+      }
+      if (runtimeJobActive && leasesActive) {
+        return { mode: 'reject', code: 'workflow_execution_recovery_required' };
+      }
+      const previousCodexSessionLease = this.recoverableCodexSessionLeaseForContinuationReadOnly({
+        session,
+        lease: codexSessionLease,
+        now,
+      });
+      if (
+        runtimeJob.status === 'terminal' &&
+        previousCodexSessionLease !== undefined &&
+        this.runWorkerLeaseIsRecoverable(runWorkerLease, now)
+      ) {
+        return {
+          mode: 'relaunch_after_fencing',
+          runSession,
+          previousRuntimeJob: runtimeJob,
+          previousCodexSessionLease,
+          ...(runWorkerLease === undefined ? {} : { previousRunWorkerLease: runWorkerLease }),
+        };
+      }
+      return { mode: 'reject', code: 'workflow_execution_recovery_required' };
+    }
+
+    if (runSession.status === 'stalled') {
+      if (runtimeJob.status !== 'terminal') {
+        return { mode: 'reject', code: 'workflow_execution_writer_still_active' };
+      }
+      const previousCodexSessionLease = this.recoverableCodexSessionLeaseForContinuationReadOnly({
+        session,
+        lease: codexSessionLease,
+        now,
+      });
+      if (previousCodexSessionLease === undefined || !this.runWorkerLeaseIsRecoverable(runWorkerLease, now)) {
+        return { mode: 'reject', code: 'workflow_execution_writer_still_active' };
+      }
+      return {
+        mode: 'relaunch_after_fencing',
+        runSession,
+        previousRuntimeJob: runtimeJob,
+        previousCodexSessionLease,
+        ...(runWorkerLease === undefined ? {} : { previousRunWorkerLease: runWorkerLease }),
+      };
+    }
+
+    if (runSession.status === 'cancel_requested') {
+      return { mode: 'reject', code: 'workflow_execution_cancel_pending' };
+    }
+
+    return { mode: 'reject', code: 'workflow_execution_not_ready_for_input' };
+  }
+
+  private workflowExecutionRuntimeTargetMatches(input: {
+    workflow: PlanItemWorkflow;
+    session: CodexSession;
+    executionPackage: ExecutionPackage;
+    runSession: RunSession;
+    runtimeJob: CodexRuntimeJob;
+  }): boolean {
+    const { workflow, session, executionPackage, runSession, runtimeJob } = input;
+    let workload: ReturnType<typeof validateCodexRunExecutionWorkload>;
+    try {
+      workload = validateCodexRunExecutionWorkload(runtimeJob.input_json);
+    } catch {
+      return false;
+    }
+    const workloadInputCapsuleDigest = workload.codex_session_runtime_context.expected_input_capsule_digest;
+    return (
+      workloadInputCapsuleDigest !== undefined &&
+      runtimeJob.input_digest === codexRuntimeJobInputDigest(workload) &&
+      runSession.execution_package_id === executionPackage.id &&
+      runSession.workflow_id === workflow.id &&
+      runSession.codex_session_id === session.id &&
+      runSession.codex_session_turn_id !== undefined &&
+      runtimeJob.target_type === 'run_session' &&
+      runtimeJob.target_id === runSession.id &&
+      runtimeJob.target_kind === 'run_execution' &&
+      runtimeJob.workflow_id === workflow.id &&
+      runtimeJob.codex_session_id === session.id &&
+      runtimeJob.codex_session_turn_id === runSession.codex_session_turn_id &&
+      runtimeJob.repo_id === executionPackage.repo_id &&
+      workload.runtime_job_id === runtimeJob.id &&
+      workload.plan_item_workflow_id === workflow.id &&
+      workload.development_plan_id === workflow.development_plan_id &&
+      workload.development_plan_item_id === workflow.development_plan_item_id &&
+      workload.run_session_id === runSession.id &&
+      workload.execution_package_id === executionPackage.id &&
+      workload.execution_package_version === executionPackage.version &&
+      workload.workspace_bundle_digest === runSession.runtime_metadata?.remote_workspace_bundle_digest &&
+      workload.codex_session_runtime_context.codex_session_id === session.id &&
+      workload.codex_session_runtime_context.codex_session_turn_id === runSession.codex_session_turn_id &&
+      workload.codex_session_runtime_context.continuation.codex_thread_id_digest === session.codex_thread_id_digest &&
+      workload.codex_session_terminalization.codex_session_id === session.id &&
+      workload.codex_session_terminalization.codex_session_turn_id === runSession.codex_session_turn_id &&
+      workload.codex_session_terminalization.expected_input_capsule_digest === workloadInputCapsuleDigest &&
+      workload.codex_session_terminalization.input_capsule_digest === workloadInputCapsuleDigest
+    );
+  }
+
+  private requireRuntimeJobInputCapsuleDigest(runtimeJob: CodexRuntimeJob, message: string): string {
+    const workload = validateCodexRunExecutionWorkload(runtimeJob.input_json);
+    return this.requireString(workload.codex_session_runtime_context.expected_input_capsule_digest, message);
+  }
+
+  private runtimeJobInputCapsuleDigestMatchesSession(runtimeJob: CodexRuntimeJob, session: CodexSession): boolean {
+    try {
+      return this.requireRuntimeJobInputCapsuleDigest(runtimeJob, 'Runtime input capsule digest is missing') === session.latest_capsule_digest;
+    } catch {
+      return false;
+    }
+  }
+
+  private async runtimeJobTurnIsRunning(
+    repository: DeliveryRepository,
+    runSession: RunSession,
+    runtimeJob: CodexRuntimeJob,
+  ): Promise<boolean> {
+    const turnId = runSession.codex_session_turn_id;
+    if (turnId === undefined || runtimeJob.codex_session_turn_id !== turnId) {
+      return false;
+    }
+    const turn = await repository.getCodexSessionTurn(turnId);
+    return turn !== undefined && turn.status === 'running';
+  }
+
+  private async resolveRuntimeJobCodexSessionLeaseForContinuation(
+    repository: DeliveryRepository,
+    session: CodexSession,
+    runtimeJob: CodexRuntimeJob,
+  ): Promise<CodexSessionLease | undefined> {
+    const activeLease = session.active_lease_id === undefined ? undefined : await repository.getCodexSessionLease(session.active_lease_id);
+    if (activeLease !== undefined && activeLease.worker_id === runtimeJob.worker_id) {
+      return activeLease;
+    }
+    let workload: ReturnType<typeof validateCodexRunExecutionWorkload>;
+    try {
+      workload = validateCodexRunExecutionWorkload(runtimeJob.input_json);
+    } catch {
+      return activeLease;
+    }
+    const workloadLease = await repository.getCodexSessionLease(workload.codex_session_terminalization.codex_session_lease_id);
+    return workloadLease ?? activeLease;
+  }
+
+  private codexSessionLeaseIsActive(
+    lease: CodexSessionLease,
+    session: CodexSession,
+    runtimeJob: CodexRuntimeJob,
+    now: string,
+  ): boolean {
+    return this.codexSessionLeaseCanStillTerminalize(lease, session, runtimeJob, now);
+  }
+
+  private codexSessionLeaseCanStillTerminalize(
+    lease: CodexSessionLease,
+    session: CodexSession,
+    runtimeJob: CodexRuntimeJob,
+    now: string,
+  ): boolean {
+    return (
+      lease.status === 'active' &&
+      lease.expires_at > now &&
+      lease.codex_session_id === session.id &&
+      session.active_lease_id === lease.id &&
+      lease.worker_id === runtimeJob.worker_id &&
+      this.codexSessionLeaseWorkerSessionDigestMatchesRuntimeJob(lease, runtimeJob)
+    );
+  }
+
+  private codexSessionLeaseWorkerSessionDigestMatchesRuntimeJob(
+    lease: CodexSessionLease,
+    runtimeJob: CodexRuntimeJob,
+  ): boolean {
+    try {
+      const workload = validateCodexRunExecutionWorkload(runtimeJob.input_json);
+      return (
+        lease.worker_session_digest === workload.codex_session_runtime_context.worker_session_digest &&
+        lease.worker_session_digest === workload.codex_session_terminalization.codex_session_worker_session_digest
+      );
+    } catch {
+      return false;
+    }
+  }
+
+  private runWorkerLeaseIsActive(lease: RunWorkerLease, runtimeJob: CodexRuntimeJob, now: string): boolean {
+    return lease.status === 'active' && lease.expires_at > now && lease.worker_id === runtimeJob.worker_id;
+  }
+
+  private codexLaunchLeaseIsActive(lease: CodexLaunchLease, runtimeJob: CodexRuntimeJob, now: string): boolean {
+    return (
+      lease.id === runtimeJob.launch_lease_id &&
+      lease.worker_id === runtimeJob.worker_id &&
+      lease.expires_at > now &&
+      (lease.status === 'active' || lease.status === 'materialized')
+    );
+  }
+
+  private codexSessionLeaseIsRecoverable(lease: CodexSessionLease, session: CodexSession): boolean {
+    return (
+      lease.codex_session_id === session.id &&
+      (lease.status === 'released' || lease.status === 'expired' || lease.status === 'fenced' || lease.status === 'stale')
+    );
+  }
+
+  private runWorkerLeaseIsRecoverable(lease: RunWorkerLease | undefined, now: string): boolean {
+    return lease === undefined || lease.status === 'released' || lease.status === 'expired' || lease.expires_at <= now;
+  }
+
+  private recoverableCodexSessionLeaseForContinuationReadOnly(input: {
+    session: CodexSession;
+    lease: CodexSessionLease | undefined;
+    now: string;
+  }): CodexSessionLease | undefined {
+    const { session, lease, now } = input;
+    if (lease === undefined) {
+      return undefined;
+    }
+    if (this.codexSessionLeaseIsRecoverable(lease, session)) {
+      return lease;
+    }
+    if (
+      lease.status === 'active' &&
+      lease.expires_at <= now &&
+      lease.codex_session_id === session.id &&
+      session.active_lease_id === lease.id
+    ) {
+      return lease;
+    }
+    return undefined;
+  }
+
+  private async recoverExpiredCodexSessionLeaseForContinuation(
+    repository: DeliveryRepository,
+    input: {
+      workflow: PlanItemWorkflow;
+      session: CodexSession;
+      lease: CodexSessionLease | undefined;
+      now: string;
+    },
+  ): Promise<CodexSessionLease | undefined> {
+    const { workflow, session, lease, now } = input;
+    if (lease === undefined) {
+      return undefined;
+    }
+    if (this.codexSessionLeaseIsRecoverable(lease, session)) {
+      return lease;
+    }
+    if (
+      lease.status !== 'active' ||
+      lease.expires_at > now ||
+      lease.codex_session_id !== session.id ||
+      session.active_lease_id !== lease.id
+    ) {
+      return undefined;
+    }
+    try {
+      const recovered = await repository.recoverCodexSessionLeaseForClaim({
+        session_id: session.id,
+        workflow_id: workflow.id,
+        lease_id: lease.id,
+        lease_token_hash: lease.lease_token_hash,
+        worker_id: lease.worker_id,
+        worker_session_digest: lease.worker_session_digest,
+        lease_epoch: lease.lease_epoch,
+        ...(session.latest_capsule_digest === undefined ? {} : { expected_input_capsule_digest: session.latest_capsule_digest }),
+        ...(session.latest_capsule_id === undefined ? {} : { input_capsule_id: session.latest_capsule_id }),
+        ...(session.latest_capsule_digest === undefined ? {} : { input_capsule_digest: session.latest_capsule_digest }),
+        ...(session.base_memory_bundle_ref === undefined ? {} : { base_memory_bundle_ref: session.base_memory_bundle_ref }),
+        ...(session.base_memory_bundle_digest === undefined ? {} : { base_memory_bundle_digest: session.base_memory_bundle_digest }),
+        ...(session.latest_memory_bundle_ref === undefined ? {} : { input_memory_bundle_ref: session.latest_memory_bundle_ref }),
+        ...(session.latest_memory_bundle_digest === undefined ? {} : { input_memory_bundle_digest: session.latest_memory_bundle_digest }),
+        ...(session.latest_environment_manifest_ref === undefined
+          ? {}
+          : { input_environment_manifest_ref: session.latest_environment_manifest_ref }),
+        ...(session.latest_environment_manifest_digest === undefined
+          ? {}
+          : { input_environment_manifest_digest: session.latest_environment_manifest_digest }),
+        now,
+      });
+      return recovered.lease;
+    } catch (error) {
+      if (error instanceof DomainError) {
+        return undefined;
+      }
+      throw error;
+    }
+  }
+
+  private async createAndClaimContinueExecutionAction(
+    repository: DeliveryRepository,
+    workflow: PlanItemWorkflow,
+    session: CodexSession,
+    input: ContinueWorkflowExecutionBodyDto,
+    mode: ContinuationDecision['mode'],
+  ): Promise<PlanItemWorkflowQueuedAction> {
+    const now = this.now();
+    const contextPreviewDigest = codexCanonicalDigest({
+      schema_version: 'continue_execution_context_preview.v1',
+      workflow_id: workflow.id,
+      codex_session_id: session.id,
+      workflow_status: workflow.status,
+      mode,
+      expected_input_capsule_digest: session.latest_capsule_digest ?? null,
+      input_markdown_digest: input.input_markdown === undefined ? null : codexCanonicalDigest(input.input_markdown),
+      cancel_recovery_decision: input.cancel_recovery_decision ?? null,
+    });
+    const requestDigest = codexCanonicalDigest({
+      schema_version: 'continue_execution_request.v1',
+      workflow_id: workflow.id,
+      actor_id: input.actor_id,
+      expected_input_capsule_digest: session.latest_capsule_digest ?? null,
+      input_markdown_digest: input.input_markdown === undefined ? null : codexCanonicalDigest(input.input_markdown),
+      cancel_recovery_decision: input.cancel_recovery_decision ?? null,
+      cancel_recovery_confirmation_phrase: input.cancel_recovery_confirmation_phrase ?? null,
+    });
+    const idempotencyKey = codexCanonicalDigest({
+      schema_version: 'continue_execution_idempotency.v2',
+      workflow_id: workflow.id,
+      actor_id: input.actor_id,
+      client_idempotency_key: input.idempotency_key ?? requestDigest,
+      request_digest: requestDigest,
+    });
+    const existingAction = (await repository.listPlanItemWorkflowQueuedActions(workflow.id)).find(
+      (candidate) => candidate.kind === 'continue_execution' && candidate.idempotency_key === idempotencyKey,
+    );
+    if (existingAction !== undefined) {
+      if (existingAction.status === 'stale' || existingAction.status === 'cancelled' || existingAction.status === 'failed') {
+        throw new DomainError(
+          'workflow_action_not_runnable',
+          `workflow_action_not_runnable: Continue execution action ${existingAction.id} is ${existingAction.status}`,
+        );
+      }
+      if (existingAction.status !== 'queued' && existingAction.status !== 'running') {
+        return existingAction;
+      }
+      const claimedExisting = await repository.claimOrReplayPlanItemWorkflowQueuedActionRun({
+        workflow_id: workflow.id,
+        action_id: existingAction.id,
+        now,
+      });
+      return claimedExisting.action;
+    }
+    const action = await repository.createOrReplayPlanItemWorkflowQueuedAction({
+      id: randomUUID(),
+      workflow_id: workflow.id,
+      codex_session_id: session.id,
+      kind: 'continue_execution',
+      status: 'queued',
+      ...(session.latest_capsule_digest === undefined ? {} : { expected_input_capsule_digest: session.latest_capsule_digest }),
+      context_preview_digest: contextPreviewDigest,
+      idempotency_key: idempotencyKey,
+      created_by_actor_id: input.actor_id,
+      created_at: now,
+      updated_at: now,
+    });
+    const claimed = await repository.claimOrReplayPlanItemWorkflowQueuedActionRun({
+      workflow_id: workflow.id,
+      action_id: action.id,
+      now,
+    });
+    return claimed.action;
+  }
+
+  private async completeExistingJobInputContinuation(
+    repository: DeliveryRepository,
+    workflow: PlanItemWorkflow,
+    session: CodexSession,
+    executionPackage: ExecutionPackage,
+    action: PlanItemWorkflowQueuedAction,
+    decision: Extract<ContinuationDecision, { mode: 'existing_job_input' }>,
+    input: ContinueWorkflowExecutionBodyDto,
+  ): Promise<PlanItemWorkflowPublicDto> {
+    const now = this.now();
+    const updatedRunSession = transitionRunSession(decision.runSession, { type: 'resume_requested', at: now });
+    const runtimeMetadata = this.requireRunRuntimeMetadata(updatedRunSession, 'Execution continuation requires runtime metadata');
+    await repository.saveRunSession({
+      ...updatedRunSession,
+      runtime_metadata: {
+        ...runtimeMetadata,
+        driver_status: 'active',
+      },
+    });
+    const currentRunWorkerLease = await repository.getRunWorkerLease(decision.runSession.id);
+    if (
+      currentRunWorkerLease === undefined ||
+      !this.runWorkerLeaseIsActive(currentRunWorkerLease, decision.runtimeJob, now) ||
+      currentRunWorkerLease.id !== decision.runWorkerLease.id
+    ) {
+      throw new DomainError('workflow_execution_writer_still_active', 'Workflow execution writer lease changed before input continuation');
+    }
+    const command: RunCommand = {
+      id: randomUUID(),
+      run_session_id: decision.runSession.id,
+      command_type: 'input',
+      status: 'pending',
+      actor_id: input.actor_id,
+      payload: {
+        schema_version: 'plan_item_workflow_continue_execution_input.v1',
+        workflow_id: workflow.id,
+        queued_action_id: action.id,
+        message: input.input_markdown ?? 'Continue execution.',
+        input_markdown: input.input_markdown ?? 'Continue execution.',
+      },
+      ...(decision.runSession.codex_session_turn_id === undefined ? {} : { target_turn_id: decision.runSession.codex_session_turn_id }),
+      created_at: now,
+      updated_at: now,
+    };
+    await repository.supersedePendingRunCommands(decision.runSession.id, ['input'], now);
+    await repository.saveRunCommand(command);
+    await this.persistContinuationLineageAndTerminalAction(repository, workflow, session, action, {
+      runSession: updatedRunSession,
+      continuationKind: 'existing_job_input',
+      previousRuntimeJobId: decision.runtimeJob.id,
+      previousCapsuleDigest: this.requireRuntimeJobInputCapsuleDigest(
+        decision.runtimeJob,
+        'Execution continuation requires previous runtime input capsule digest',
+      ),
+      expectedInputCapsuleDigest: this.requireString(session.latest_capsule_digest, 'Execution continuation requires a latest capsule digest'),
+      previousCodexSessionLeaseId: decision.codexSessionLease.id,
+      previousRunWorkerLeaseId: decision.runWorkerLease.id,
+      ...(decision.runSession.codex_session_turn_id === undefined ? {} : { codexSessionTurnId: decision.runSession.codex_session_turn_id }),
+      actorId: input.actor_id,
+      eventPayload: { mode: 'existing_job_input', run_command_id: command.id, runtime_job_id: decision.runtimeJob.id },
+      now,
+    });
+    return this.continuedExecutionProjection(repository, workflow, session, executionPackage, updatedRunSession, decision.runtimeJob.id);
+  }
+
+  private async completeReplayCurrentContinuation(
+    repository: DeliveryRepository,
+    workflow: PlanItemWorkflow,
+    session: CodexSession,
+    executionPackage: ExecutionPackage,
+    action: PlanItemWorkflowQueuedAction,
+    decision: Extract<ContinuationDecision, { mode: 'replay_current_continuation' }>,
+  ): Promise<PlanItemWorkflowPublicDto> {
+    const now = this.now();
+    await this.persistContinuationLineageAndTerminalAction(repository, workflow, session, action, {
+      runSession: decision.runSession,
+      continuationKind: 'replay_current_continuation',
+      previousRuntimeJobId: decision.runtimeJob.id,
+      previousCapsuleDigest: this.requireRuntimeJobInputCapsuleDigest(
+        decision.runtimeJob,
+        'Execution continuation requires previous runtime input capsule digest',
+      ),
+      expectedInputCapsuleDigest: this.requireString(session.latest_capsule_digest, 'Execution continuation requires a latest capsule digest'),
+      previousCodexSessionLeaseId: decision.codexSessionLease.id,
+      previousRunWorkerLeaseId: decision.runWorkerLease.id,
+      ...(decision.runSession.codex_session_turn_id === undefined ? {} : { codexSessionTurnId: decision.runSession.codex_session_turn_id }),
+      actorId: action.created_by_actor_id,
+      eventPayload: { mode: 'replay_current_continuation', runtime_job_id: decision.runtimeJob.id },
+      now,
+    });
+    return this.continuedExecutionProjection(repository, workflow, session, executionPackage, decision.runSession, decision.runtimeJob.id);
+  }
+
+  private async completeRelaunchAfterFencingContinuation(
+    repository: DeliveryRepository,
+    workflow: PlanItemWorkflow,
+    session: CodexSession,
+    executionPackage: ExecutionPackage,
+    action: PlanItemWorkflowQueuedAction,
+    decision: Extract<ContinuationDecision, { mode: 'relaunch_after_fencing' }>,
+    input: ContinueWorkflowExecutionBodyDto,
+  ): Promise<PlanItemWorkflowPublicDto> {
+    const scheduled = await this.scheduleContinuationRelaunchRuntimeJob(repository, {
+      workflow,
+      session,
+      executionPackage,
+      action,
+      runSession: decision.runSession,
+      previousRuntimeJob: decision.previousRuntimeJob,
+      actorId: input.actor_id,
+      cancelRecovery: decision.cancelRecovery === true,
+    });
+    await this.persistContinuationLineageAndTerminalAction(repository, workflow, scheduled.session, action, {
+      runSession: scheduled.runSession,
+      continuationKind: 'relaunch_after_fencing',
+      previousRuntimeJobId: decision.previousRuntimeJob.id,
+      newRuntimeJobId: scheduled.runtimeJob.id,
+      previousCapsuleDigest: this.requireRuntimeJobInputCapsuleDigest(
+        decision.previousRuntimeJob,
+        'Execution continuation requires previous runtime input capsule digest',
+      ),
+      expectedInputCapsuleDigest: this.requireString(scheduled.session.latest_capsule_digest, 'Execution continuation requires a latest capsule digest'),
+      previousCodexSessionLeaseId: decision.previousCodexSessionLease.id,
+      ...(decision.previousRunWorkerLease?.id === undefined ? {} : { previousRunWorkerLeaseId: decision.previousRunWorkerLease.id }),
+      codexSessionTurnId: scheduled.turn.id,
+      actorId: input.actor_id,
+      eventPayload: {
+        mode: 'relaunch_after_fencing',
+        previous_runtime_job_id: decision.previousRuntimeJob.id,
+        new_runtime_job_id: scheduled.runtimeJob.id,
+        cancel_recovery: decision.cancelRecovery === true,
+        cancel_recovery_decision: input.cancel_recovery_decision ?? null,
+      },
+      now: scheduled.now,
+    });
+    return this.continuedExecutionProjection(
+      repository,
+      workflow,
+      scheduled.session,
+      executionPackage,
+      scheduled.runSession,
+      scheduled.runtimeJob.id,
+    );
+  }
+
+  private requireRunRuntimeMetadata(runSession: RunSession, message: string): RunRuntimeMetadata {
+    if (runSession.runtime_metadata === undefined) {
+      throw new DomainError('workflow_evidence_missing', message);
+    }
+    return runSession.runtime_metadata;
+  }
+
+  private async persistContinuationLineageAndTerminalAction(
+    repository: DeliveryRepository,
+    workflow: PlanItemWorkflow,
+    session: CodexSession,
+    action: PlanItemWorkflowQueuedAction,
+    input: {
+      runSession: RunSession;
+      continuationKind: ExecutionContinuationLineage['continuation_kind'];
+      previousRuntimeJobId: string;
+      newRuntimeJobId?: string;
+      previousCapsuleDigest: string;
+      expectedInputCapsuleDigest: string;
+      previousCodexSessionLeaseId: string;
+      previousRunWorkerLeaseId?: string;
+      codexSessionTurnId?: string;
+      actorId: string;
+      eventPayload: Record<string, unknown>;
+      now: string;
+    },
+  ): Promise<void> {
+    const lineageId = stableUuid({
+      schema_version: 'execution_continuation_lineage_id.v1',
+      workflow_id: workflow.id,
+      run_session_id: input.runSession.id,
+      queued_action_id: action.id,
+      continuation_kind: input.continuationKind,
+      previous_runtime_job_id: input.previousRuntimeJobId,
+      new_runtime_job_id: input.newRuntimeJobId ?? null,
+    });
+    await repository.saveExecutionContinuationLineage({
+      id: lineageId,
+      workflow_id: workflow.id,
+      run_session_id: input.runSession.id,
+      codex_session_id: session.id,
+      queued_action_id: action.id,
+      continuation_kind: input.continuationKind,
+      previous_runtime_job_id: input.previousRuntimeJobId,
+      ...(input.newRuntimeJobId === undefined ? {} : { new_runtime_job_id: input.newRuntimeJobId }),
+      ...(input.codexSessionTurnId === undefined ? {} : { codex_session_turn_id: input.codexSessionTurnId }),
+      previous_capsule_digest: input.previousCapsuleDigest,
+      expected_input_capsule_digest: input.expectedInputCapsuleDigest,
+      previous_codex_session_lease_id: input.previousCodexSessionLeaseId,
+      ...(input.previousRunWorkerLeaseId === undefined ? {} : { previous_run_worker_lease_id: input.previousRunWorkerLeaseId }),
+      created_by_actor_id: input.actorId,
+      created_at: input.now,
+    });
+
+    if (action.status === 'running') {
+      await repository.terminalizePlanItemWorkflowQueuedAction({
+        workflow_id: workflow.id,
+        action_id: action.id,
+        status: 'succeeded',
+        ...(input.codexSessionTurnId === undefined ? {} : { codex_session_turn_id: input.codexSessionTurnId }),
+        now: input.now,
+      });
+    } else if (action.status !== 'succeeded') {
+      throw new DomainError(
+        'workflow_action_not_runnable',
+        `workflow_action_not_runnable: Plan Item Workflow queued action ${action.id} is not running`,
+      );
+    }
+
+    const eventId = stableUuid({
+      schema_version: 'execution_continuation_event_id.v1',
+      workflow_id: workflow.id,
+      queued_action_id: action.id,
+      lineage_id: lineageId,
+    });
+    const existingEvents = await repository.listObjectEvents(workflow.id, 'plan_item_workflow');
+    if (!existingEvents.some((event) => event.id === eventId)) {
+      await repository.appendObjectEvent({
+        id: eventId,
+        object_type: 'plan_item_workflow',
+        object_id: workflow.id,
+        event_type: 'workflow_execution_continued',
+        actor_type: 'human',
+        actor_id: input.actorId,
+        payload: {
+          schema_version: 'plan_item_workflow_execution_continued.v1',
+          continuation_kind: input.continuationKind,
+          queued_action_id: action.id,
+          lineage_id: lineageId,
+          run_session_id: input.runSession.id,
+          ...input.eventPayload,
+        },
+        metadata: {
+          codex_session_id: session.id,
+          ...(input.codexSessionTurnId === undefined ? {} : { codex_session_turn_id: input.codexSessionTurnId }),
+          previous_runtime_job_id: input.previousRuntimeJobId,
+          ...(input.newRuntimeJobId === undefined ? {} : { new_runtime_job_id: input.newRuntimeJobId }),
+          previous_capsule_digest: input.previousCapsuleDigest,
+          expected_input_capsule_digest: input.expectedInputCapsuleDigest,
+        },
+        created_at: input.now,
+      });
+    }
+  }
+
+  private continuedExecutionProjection(
+    repository: DeliveryRepository,
+    workflow: PlanItemWorkflow,
+    session: CodexSession,
+    executionPackage: ExecutionPackage,
+    runSession: RunSession,
+    runtimeJobId: string,
+  ): Promise<PlanItemWorkflowPublicDto> {
+    return this.toPublicWorkflowDtoWithRepository(repository, workflow, session, [], {
+      execution_run_summary: this.executionRunSummary({
+        workflow,
+        session,
+        executionPackage,
+        runSessionId: runSession.id,
+        runtimeJobId,
+        ...(runSession.codex_session_turn_id === undefined ? {} : { executionTurnId: runSession.codex_session_turn_id }),
+        ...(session.latest_capsule_digest === undefined ? {} : { inputCapsuleDigest: session.latest_capsule_digest }),
+        ...(runSession.runtime_metadata?.remote_workspace_bundle_digest === undefined
+          ? {}
+          : { workspaceBundleDigest: runSession.runtime_metadata.remote_workspace_bundle_digest }),
+        ...(session.codex_thread_id_digest === undefined ? {} : { codexThreadIdDigest: session.codex_thread_id_digest }),
+        status: runSession.status,
+      }),
+    });
+  }
+
+  private async scheduleContinuationRelaunchRuntimeJob(
+    repository: DeliveryRepository,
+    input: {
+      workflow: PlanItemWorkflow;
+      session: CodexSession;
+      executionPackage: ExecutionPackage;
+      action: PlanItemWorkflowQueuedAction;
+      runSession: RunSession;
+      previousRuntimeJob: CodexRuntimeJob;
+      actorId: string;
+      cancelRecovery: boolean;
+    },
+  ): Promise<{
+      session: CodexSession;
+      turn: CodexSessionTurn;
+      runSession: RunSession;
+      runtimeJob: CodexRuntimeJob;
+      now: string;
+    }> {
+    const { workflow, session, executionPackage, action, runSession, previousRuntimeJob, actorId } = input;
+    if (previousRuntimeJob.status !== 'terminal') {
+      throw new DomainError('workflow_execution_writer_still_active', 'Execution continuation relaunch requires terminal previous runtime job');
+    }
+    const now = this.now();
+    const inputCapsule = await this.requireLatestExecutionInputCapsule(repository, session);
+    const inputContinuity = this.requireExecutionInputContinuity(session);
+    const runtimeBinding = await this.resolveActiveExecutionRuntimeBinding(repository, executionPackage, now);
+    const runtimeExpiresAt = new Date(Date.parse(now) + 10 * 60_000).toISOString();
+    const workerSessionDigest = await repository.getCodexWorkerSessionDigest(runtimeBinding.worker.id);
+    if (workerSessionDigest === undefined) {
+      throw new DomainError('workflow_runtime_binding_unavailable', 'Execution worker session digest is unavailable');
+    }
+    const executionTurn = await this.createWorkflowChildTurn(
+      repository,
+      workflow,
+      session,
+      actorId,
+      'continue_execution',
+      `continue-execution:${runSession.id}:${action.id}`,
+    );
+    const sessionWithTurn = (await repository.getCodexSession(session.id)) ?? session;
+    const runtimeJobId = randomUUID();
+    const launchLeaseId = randomUUID();
+    const envelopeId = randomUUID();
+    const leaseToken = `codex-session-execution-continuation:${randomUUID()}`;
+    const runWorkerLeaseToken = `run-worker-execution-continuation:${randomUUID()}`;
+    const runSpec = buildRunSpec(await loadRunContext(repository, runSession.id), {
+      defaultExecutorType: 'local_codex',
+      workflowOnly: false,
+    });
+    const workflowExecutionPayload = this.workflowExecutionPayload(executionPackage, this.workflowExecutionRemoteRunSpec(runSpec));
+    const workspaceBundle = this.workflowExecutionWorkspaceBundle(now, workflowExecutionPayload);
+    const resumedRunSession = transitionRunSession(runSession, { type: 'resume_requested', at: now });
+    const runtimeMetadata = this.requireRunRuntimeMetadata(runSession, 'Execution continuation relaunch requires runtime metadata');
+    const runSessionWithRuntime: RunSession = {
+      ...resumedRunSession,
+      codex_session_id: session.id,
+      codex_session_turn_id: executionTurn.id,
+      executor_type: 'local_codex',
+      run_spec: runSpec,
+      runtime_metadata: {
+        ...runtimeMetadata,
+        driver_kind: 'app_server',
+        driver_status: 'not_started',
+        recovery_attempt_count: runtimeMetadata.recovery_attempt_count + 1,
+        effective_dangerous_mode: 'confirmed',
+        runtime_profile_id: runtimeBinding.runtime_profile_id,
+        runtime_profile_revision_id: runtimeBinding.runtime_profile_revision_id,
+        runtime_profile_digest: runtimeBinding.runtime_profile_digest,
+        runtime_target_kind: 'run_execution',
+        source_access_mode: 'path_policy_scoped',
+        environment: runtimeBinding.environment,
+        credential_binding_id: runtimeBinding.credential_binding_id,
+        credential_binding_version_id: runtimeBinding.credential_binding_version_id,
+        credential_payload_digest: runtimeBinding.credential_payload_digest,
+        launch_lease_id: launchLeaseId,
+        docker_image_digest: runtimeBinding.docker_image_digest,
+        network_policy_digest: runtimeBinding.network_policy_digest,
+        ...(runtimeBinding.network_provider_config_digest === undefined
+          ? {}
+          : { network_provider_config_digest: runtimeBinding.network_provider_config_digest }),
+        remote_runtime_job_id: runtimeJobId,
+        remote_runtime_job_created: true,
+        remote_workspace_bundle_digest: workspaceBundle.archive_digest,
+        remote_workspace_manifest_digest: workspaceBundle.manifest_digest,
+        remote_workspace_bundle_size_bytes: workspaceBundle.bytes.byteLength,
+        remote_workspace_bundle_expires_at: runtimeExpiresAt,
+      },
+    };
+    await repository.saveRunSession(runSessionWithRuntime);
+    const runWorkerLease = await repository.claimRunWorkerLease({
+      run_session_id: runSession.id,
+      worker_id: runtimeBinding.worker.id,
+      lease_token: runWorkerLeaseToken,
+      now,
+      expires_at: runtimeExpiresAt,
+    });
+    const codexLease = await repository.claimCodexSessionLease({
+      session_id: session.id,
+      workflow_id: workflow.id,
+      lease_id: randomUUID(),
+      lease_token_hash: codexCredentialPayloadDigest(leaseToken),
+      worker_id: runtimeBinding.worker.id,
+      worker_session_digest: workerSessionDigest,
+      expected_input_capsule_digest: inputCapsule.digest,
+      input_capsule_id: inputCapsule.id,
+      input_capsule_digest: inputCapsule.digest,
+      ...(session.base_memory_bundle_ref === undefined ? {} : { base_memory_bundle_ref: session.base_memory_bundle_ref }),
+      ...(session.base_memory_bundle_digest === undefined ? {} : { base_memory_bundle_digest: session.base_memory_bundle_digest }),
+      ...inputContinuity,
+      now,
+      expires_at: runtimeExpiresAt,
+    });
+    const pendingWorkspaceBundleRef = `artifact://internal/workspace_bundle/run_session/${runSession.id}/${workspaceBundle.id}`;
+    const workspaceAcquisition = {
+      schema_version: 'workspace_bundle_acquisition.v1' as const,
+      bundle_id: workspaceBundle.id,
+      archive_ref: pendingWorkspaceBundleRef,
+      archive_digest: workspaceBundle.archive_digest,
+      manifest_digest: workspaceBundle.manifest_digest,
+      size_bytes: workspaceBundle.bytes.byteLength,
+      expires_at: runtimeExpiresAt,
+    };
+    const workspaceAcquisitionDigest = this.requireString(
+      codexWorkspaceAcquisitionDigest(workspaceAcquisition),
+      'Workspace acquisition digest missing',
+    );
+    const workload: CodexRunExecutionWorkloadV1 = validateCodexRunExecutionWorkload({
+      schema_version: 'codex_run_execution_workload.v1',
+      runtime_job_id: runtimeJobId,
+      plan_item_workflow_id: workflow.id,
+      development_plan_id: workflow.development_plan_id,
+      development_plan_item_id: workflow.development_plan_item_id,
+      run_session_id: runSession.id,
+      execution_package_id: executionPackage.id,
+      execution_package_version: executionPackage.version,
+      workspace_bundle_id: workspaceBundle.id,
+      workspace_bundle_digest: workspaceBundle.archive_digest,
+      package_prompt_ref: `artifact://codex-runtime-jobs/${runtimeJobId}/workload/package-prompt`,
+      package_prompt_digest: codexCanonicalDigest(workflowExecutionPayload.packagePrompt),
+      execution_context_ref: `artifact://codex-runtime-jobs/${runtimeJobId}/workload/execution-context`,
+      execution_context_digest: codexCanonicalDigest(workflowExecutionPayload.executionContext),
+      path_policy_digest: codexCanonicalDigest({
+        allowed_paths: executionPackage.allowed_paths,
+        forbidden_paths: executionPackage.forbidden_paths,
+        source_mutation_policy: executionPackage.source_mutation_policy,
+      }),
+      required_checks_digest: codexCanonicalDigest(executionPackage.required_checks),
+      output_schema_version: 'codex_run_execution_result.v1',
+      created_at: now,
+      expires_at: runtimeExpiresAt,
+      workspace_acquisition_json: workspaceAcquisition,
+      codex_session_runtime_context: {
+        schema_version: 'codex_session_runtime_context.v1',
+        codex_session_id: session.id,
+        codex_session_turn_id: executionTurn.id,
+        lease_id: launchLeaseId,
+        lease_epoch: codexLease.lease.lease_epoch,
+        worker_id: runtimeBinding.worker.id,
+        worker_session_digest: workerSessionDigest,
+        expected_input_capsule_digest: inputCapsule.digest,
+        turn_group_status: 'complete',
+        continuation: {
+          kind: 'resume_thread',
+          codex_thread_id: this.requireString(session.codex_thread_id, 'Execution continuation requires a Codex thread id'),
+          codex_thread_id_digest: this.requireString(
+            session.codex_thread_id_digest,
+            'Execution continuation requires a Codex thread id digest',
+          ),
+        },
+      },
+      codex_session_terminalization: {
+        schema_version: 'codex_session_terminalization.v1',
+        lease_token: leaseToken,
+        codex_session_lease_id: codexLease.lease.id,
+        codex_session_lease_epoch: codexLease.lease.lease_epoch,
+        codex_session_worker_id: runtimeBinding.worker.id,
+        codex_session_worker_session_digest: workerSessionDigest,
+        codex_session_id: session.id,
+        codex_session_turn_id: executionTurn.id,
+        expected_input_capsule_digest: inputCapsule.digest,
+        input_capsule_id: inputCapsule.id,
+        input_capsule_ref: inputCapsule.artifact_ref,
+        input_capsule_digest: inputCapsule.digest,
+        ...(session.base_memory_bundle_ref === undefined ? {} : { base_memory_bundle_ref: session.base_memory_bundle_ref }),
+        ...(session.base_memory_bundle_digest === undefined ? {} : { base_memory_bundle_digest: session.base_memory_bundle_digest }),
+        ...inputContinuity,
+      },
+    });
+    const workspaceBundleArtifact = await new LocalInternalArtifactStore({
+      root: this.internalArtifactStoreRoot,
+      repository,
+      requestId: `plan-item-workflow-execution-continuation-${workflow.id}`,
+    }).putObject({
+      artifact_id: workspaceBundle.id,
+      kind: 'workspace_bundle',
+      owner_type: 'run_session',
+      owner_id: runSession.id,
+      visibility: 'internal',
+      content_type: 'application/vnd.forgeloop.workspace-bundle',
+      declared_size_bytes: String(workspaceBundle.bytes.byteLength),
+      declared_artifact_digest: workspaceBundle.archive_digest,
+      idempotency_key: workspaceBundle.id,
+      metadata_json: {
+        manifest_digest: workspaceBundle.manifest_digest,
+        execution_package_id: executionPackage.id,
+        run_worker_lease_id: runWorkerLease.id,
+        workspace_acquisition_digest: workspaceAcquisitionDigest,
+        previous_runtime_job_id: previousRuntimeJob.id,
+        continuation_action_id: action.id,
+        cancel_recovery: input.cancelRecovery,
+      },
+      created_by_actor_type: 'system',
+      created_by_actor_id: actorId,
+      now,
+      max_size_bytes: 100 * 1024 * 1024,
+      bytes: workspaceBundle.bytes,
+    });
+    const pendingWorkspaceBundle = {
+      id: randomUUID(),
+      bundle_id: workspaceBundle.id,
+      run_session_id: runSession.id,
+      execution_package_id: executionPackage.id,
+      pending_artifact_ref: pendingWorkspaceBundleRef,
+      internal_artifact_object_id: workspaceBundleArtifact.id,
+      archive_digest: workspaceBundle.archive_digest,
+      manifest_digest: workspaceBundle.manifest_digest,
+      run_worker_lease_id: runWorkerLease.id,
+      size_bytes: workspaceBundle.bytes.byteLength,
+      workspace_acquisition_digest: workspaceAcquisitionDigest,
+      workspace_acquisition_json: workspaceAcquisition,
+      expires_at: runtimeExpiresAt,
+      request_digest: codexCanonicalDigest({
+        runtime_job_id: runtimeJobId,
+        workspace_bundle_id: workspaceBundle.id,
+        archive_digest: workspaceBundle.archive_digest,
+        internal_artifact_object_id: workspaceBundleArtifact.id,
+      }),
+      created_at: now,
+    };
+    await repository.createPendingWorkspaceBundleArtifact(pendingWorkspaceBundle);
+    const runtimeJobResult = await repository.createOrReplayCodexRuntimeJobWithLeaseAndEnvelope({
+      runtime_job_id: runtimeJobId,
+      launch_lease_id: launchLeaseId,
+      envelope_id: envelopeId,
+      job_request_id: codexCanonicalDigest({
+        kind: 'plan_item_workflow_execution_continue',
+        workflow_id: workflow.id,
+        run_session_id: runSession.id,
+        queued_action_id: action.id,
+        previous_runtime_job_id: previousRuntimeJob.id,
+      }),
+      target: {
+        target_type: 'run_session',
+        target_id: runSession.id,
+        target_kind: 'run_execution',
+        project_id: executionPackage.project_id,
+        repo_id: executionPackage.repo_id,
+      },
+      launch_attempt: previousRuntimeJob.launch_attempt + 1,
+      worker_id: runtimeBinding.worker.id,
+      runtime_profile_revision_id: runtimeBinding.runtime_profile_revision_id,
+      runtime_profile_digest: runtimeBinding.runtime_profile_digest,
+      credential_binding_id: runtimeBinding.credential_binding_id,
+      credential_binding_version_id: runtimeBinding.credential_binding_version_id,
+      credential_payload_digest: runtimeBinding.credential_payload_digest,
+      docker_image_digest: runtimeBinding.docker_image_digest,
+      network_policy_digest: runtimeBinding.network_policy_digest,
+      ...(runtimeBinding.network_provider_config_digest === undefined
+        ? {}
+        : { network_provider_config_digest: runtimeBinding.network_provider_config_digest }),
+      input_json: workload as unknown as Record<string, unknown>,
+      input_digest: codexRuntimeJobInputDigest(workload),
+      workspace_acquisition_json: workspaceAcquisition,
+      workspace_acquisition_digest: workspaceAcquisitionDigest,
+      pending_workspace_bundle: pendingWorkspaceBundle,
+      execution_package_id: executionPackage.id,
+      run_worker_lease_id: runWorkerLease.id,
+      run_worker_lease_token_hash: codexCredentialPayloadDigest(runWorkerLeaseToken),
+      run_session_status: runSessionWithRuntime.status,
+      run_session_updated_at: runSessionWithRuntime.updated_at,
+      execution_package_version: executionPackage.version,
+      workflow_id: workflow.id,
+      codex_session_id: session.id,
+      codex_session_turn_id: executionTurn.id,
+      expires_at: runtimeExpiresAt,
+      now,
+    });
+    const persistedRunSession = this.requireFound(await repository.getRunSession(runSession.id), `RunSession ${runSession.id}`);
+    return {
+      session: (await repository.getCodexSession(session.id)) ?? codexLease.session ?? sessionWithTurn,
+      turn: executionTurn,
+      runSession: persistedRunSession,
+      runtimeJob: runtimeJobResult.runtime_job,
+      now,
+    };
   }
 
   private async requireExistingExecutionRunSummary(
@@ -1939,6 +4551,34 @@ export class PlanItemWorkflowService {
       throw new DomainError('codex_runtime_capsule_stale', 'Execution input capsule is stale');
     }
     return capsule;
+  }
+
+  private async requireLatestExecutionContinuationInputs(
+    repository: DeliveryRepository,
+    workflow: PlanItemWorkflow,
+    session: CodexSession,
+  ): Promise<{
+    inputCapsule: CodexRuntimeCapsule;
+    inputContinuity: WorkflowExecutionInputContinuity;
+  }> {
+    const inputCapsule = await this.requireLatestExecutionInputCapsule(repository, session);
+    const inputContinuity = this.requireExecutionInputContinuity(session);
+    const producerTurn = await repository.getCodexSessionTurn(inputCapsule.created_from_turn_id);
+    if (
+      producerTurn === undefined ||
+      producerTurn.workflow_id !== workflow.id ||
+      producerTurn.codex_session_id !== session.id ||
+      producerTurn.status !== 'succeeded' ||
+      producerTurn.output_capsule_id !== inputCapsule.id ||
+      producerTurn.output_capsule_digest !== inputCapsule.digest ||
+      producerTurn.output_memory_bundle_ref !== inputContinuity.input_memory_bundle_ref ||
+      producerTurn.output_memory_bundle_digest !== inputContinuity.input_memory_bundle_digest ||
+      producerTurn.output_environment_manifest_ref !== inputContinuity.input_environment_manifest_ref ||
+      producerTurn.output_environment_manifest_digest !== inputContinuity.input_environment_manifest_digest
+    ) {
+      throw new DomainError('codex_runtime_capsule_stale', 'Execution input capsule lineage is stale');
+    }
+    return { inputCapsule, inputContinuity };
   }
 
   private async resolveActiveExecutionRuntimeBinding(
@@ -2308,7 +4948,7 @@ export class PlanItemWorkflowService {
           actor_id: input.actor_id,
           source_revision_id: revision.id,
         });
-        return this.toPublicWorkflowDto(updated, session, [queuedAction]);
+        return this.toPublicWorkflowDtoWithRepository(repository, updated, session, [queuedAction]);
       }),
     );
   }
@@ -2370,7 +5010,7 @@ export class PlanItemWorkflowService {
           actor_id: input.actor_id,
           source_revision_id: revisionId,
         });
-        return this.toPublicWorkflowDto(updated, session, [queuedAction]);
+        return this.toPublicWorkflowDtoWithRepository(repository, updated, session, [queuedAction]);
       }),
     );
   }
@@ -2421,7 +5061,7 @@ export class PlanItemWorkflowService {
           );
         }
         const session = await this.requireActiveSession(repository, workflow);
-        return this.toPublicWorkflowDto(workflow, session, [], {
+        return this.toPublicWorkflowDtoWithRepository(repository, workflow, session, [], {
           readiness: this.notEvaluatedReadiness(true),
         });
       }),
@@ -2482,7 +5122,7 @@ export class PlanItemWorkflowService {
           source_revision_id: revisionId,
           change_request_id: changeRequestId,
         });
-        return this.toPublicWorkflowDto(updated, session, [queuedAction]);
+        return this.toPublicWorkflowDtoWithRepository(repository, updated, session, [queuedAction]);
       }),
     );
   }
@@ -2888,7 +5528,7 @@ export class PlanItemWorkflowService {
     input: ManualDecisionTransitionInput,
   ) {
     const { updated, session } = await this.performManualDecisionTransitionRecordWithRepository(repository, workflow, input);
-    return this.toPublicWorkflowDto(updated, session);
+    return this.toPublicWorkflowDtoWithRepository(repository, updated, session);
   }
 
   private async performManualDecisionTransitionRecordWithRepository(
@@ -4115,6 +6755,10 @@ export class PlanItemWorkflowService {
     options: {
       readiness?: PlanItemWorkflowReadiness;
       execution_run_summary?: PlanItemWorkflowExecutionRunSummary;
+      attempt_history?: PlanItemWorkflowAttemptHistory[];
+      current_review_packet?: PlanItemWorkflowPublicDto['current_review_packet'];
+      latest_review_response?: PlanItemWorkflowPublicDto['latest_review_response'];
+      recovery_options?: PlanItemWorkflowRecoveryOption[];
       blockers?: Parameters<typeof planItemWorkflowPublicProjection>[0]['blockers'];
     } = {},
   ) {
@@ -4137,8 +6781,425 @@ export class PlanItemWorkflowService {
       },
       ...(options.readiness === undefined ? {} : { readiness: options.readiness }),
       ...(options.execution_run_summary === undefined ? {} : { execution_run_summary: options.execution_run_summary }),
+      ...(options.attempt_history === undefined ? {} : { attempt_history: options.attempt_history }),
+      ...(options.current_review_packet === undefined ? {} : { current_review_packet: options.current_review_packet }),
+      ...(options.latest_review_response === undefined ? {} : { latest_review_response: options.latest_review_response }),
+      ...(options.recovery_options === undefined ? {} : { recovery_options: options.recovery_options }),
       ...(options.blockers === undefined ? {} : { blockers: options.blockers }),
     });
+  }
+
+  private async toPublicWorkflowDtoWithRepository(
+    repository: DeliveryRepository,
+    workflow: PlanItemWorkflow,
+    session: CodexSession,
+    queuedActions: readonly PlanItemWorkflowQueuedAction[] = [],
+    options: {
+      readiness?: PlanItemWorkflowReadiness;
+      execution_run_summary?: PlanItemWorkflowExecutionRunSummary;
+      blockers?: Parameters<typeof planItemWorkflowPublicProjection>[0]['blockers'];
+    } = {},
+  ): Promise<PlanItemWorkflowPublicDto> {
+    const [attemptHistory, currentReviewPacket, latestReviewResponse, recoveryOptions] = await Promise.all([
+      this.workflowAttemptHistory(repository, workflow.id),
+      this.workflowCurrentReviewPacket(repository, workflow),
+      this.workflowLatestReviewResponse(repository, workflow.id),
+      this.workflowRecoveryOptions(repository, workflow),
+    ]);
+    return this.toPublicWorkflowDto(workflow, session, queuedActions, {
+      ...options,
+      attempt_history: attemptHistory,
+      ...(currentReviewPacket === undefined ? {} : { current_review_packet: currentReviewPacket }),
+      ...(latestReviewResponse === undefined ? {} : { latest_review_response: latestReviewResponse }),
+      recovery_options: recoveryOptions,
+    });
+  }
+
+  private async workflowAttemptHistory(
+    repository: DeliveryRepository,
+    workflowId: string,
+  ): Promise<PlanItemWorkflowAttemptHistory[]> {
+    const [attempts, continuations] = await Promise.all([
+      repository.listRunSessionAttemptLineage(workflowId),
+      repository.listExecutionContinuationLineage(workflowId),
+    ]);
+    return Promise.all(
+      attempts.map(async (attempt) => {
+        const runSession = await repository.getRunSession(attempt.run_session_id);
+        return {
+          run_session_id: attempt.run_session_id,
+          attempt_kind: attempt.attempt_kind,
+          ...(attempt.previous_run_session_id === undefined ? {} : { previous_run_session_id: attempt.previous_run_session_id }),
+          ...(attempt.previous_review_packet_id === undefined ? {} : { previous_review_packet_id: attempt.previous_review_packet_id }),
+          status: runSession?.status ?? 'unknown',
+          continuation_events: continuations
+            .filter((continuation) => continuation.run_session_id === attempt.run_session_id)
+            .map((continuation) => ({
+              queued_action_id: continuation.queued_action_id,
+              continuation_kind: continuation.continuation_kind,
+              created_at: continuation.created_at,
+            })),
+          created_at: attempt.created_at,
+          updated_at: runSession?.updated_at ?? attempt.created_at,
+        };
+      }),
+    );
+  }
+
+  private async workflowCurrentReviewPacket(
+    repository: DeliveryRepository,
+    workflow: PlanItemWorkflow,
+  ): Promise<PlanItemWorkflowPublicDto['current_review_packet'] | undefined> {
+    if (
+      workflow.execution_package_id === undefined ||
+      workflow.active_spec_doc_revision_id === undefined ||
+      workflow.active_implementation_plan_doc_revision_id === undefined
+    ) {
+      return undefined;
+    }
+    const executionPackage = await repository.getExecutionPackage(workflow.execution_package_id);
+    if (
+      executionPackage === undefined ||
+      executionPackage.workflow_id !== workflow.id ||
+      executionPackage.last_run_session_id === undefined
+    ) {
+      return undefined;
+    }
+
+    const executionPackageVersion = executionPackage.execution_package_version ?? executionPackage.version;
+    const packet = await repository.findCurrentReviewPacketForWorkflow({
+      workflow_id: workflow.id,
+      execution_package_id: executionPackage.id,
+      execution_package_version: executionPackageVersion,
+      previous_run_session_id: executionPackage.last_run_session_id,
+      approved_spec_revision_id: workflow.active_spec_doc_revision_id,
+      approved_implementation_plan_revision_id: workflow.active_implementation_plan_doc_revision_id,
+      allowed_statuses: ['ready', 'in_review', 'completed'],
+      allowed_completed_decisions: ['changes_requested'],
+    });
+    if (packet === undefined) {
+      return undefined;
+    }
+
+    const evidenceRefs = await repository.listReviewPacketEvidenceRefs(packet.id);
+    assertReviewPacketEvidenceRefsAreSafe(packet, evidenceRefs);
+    const digest = reviewPacketInputDigest({
+      packet,
+      evidence_refs: evidenceRefs,
+      previous_run_session_id: executionPackage.last_run_session_id,
+      execution_package_id: executionPackage.id,
+      execution_package_version: executionPackageVersion,
+      approved_spec_revision_id: workflow.active_spec_doc_revision_id,
+      approved_implementation_plan_revision_id: workflow.active_implementation_plan_doc_revision_id,
+    });
+    if (packet.current_digest !== undefined && packet.current_digest !== digest) {
+      return undefined;
+    }
+
+    return {
+      id: packet.id,
+      digest,
+      previous_run_session_id: executionPackage.last_run_session_id,
+      status: packet.status,
+      decision: packet.decision,
+      ...(packet.summary === undefined ? {} : { summary: packet.summary }),
+      evidence_refs: evidenceRefs.map((ref) => ({
+        id: ref.id,
+        ref_kind: ref.ref_kind,
+        visibility: ref.visibility,
+        display_text: ref.display_text,
+        digest: ref.digest,
+        ...(ref.url === undefined || ref.visibility !== 'public' ? {} : { url: ref.url }),
+      })),
+    };
+  }
+
+  private async workflowLatestReviewResponse(
+    repository: DeliveryRepository,
+    workflowId: string,
+  ): Promise<PlanItemWorkflowPublicDto['latest_review_response'] | undefined> {
+    const response = await repository.getLatestReviewResponseForWorkflow(workflowId);
+    if (response === undefined) {
+      return undefined;
+    }
+    return {
+      id: response.id,
+      review_packet_id: response.review_packet_id,
+      previous_run_session_id: response.previous_run_session_id,
+      status: response.status,
+      ...(response.summary === undefined ? {} : { summary: response.summary }),
+      ...(response.response_markdown === undefined ? {} : { response_markdown: response.response_markdown }),
+      created_at: response.created_at,
+    };
+  }
+
+  private async assertNoActiveTerminalizableWorkflowRuntime(
+    repository: DeliveryRepository,
+    session: CodexSession,
+    now: string,
+  ): Promise<void> {
+    const activeLease = session.active_lease_id === undefined ? undefined : await repository.getCodexSessionLease(session.active_lease_id);
+    if (activeLease !== undefined && activeLease.status === 'active' && activeLease.expires_at > now) {
+      throw new DomainError('workflow_execution_writer_still_active', 'Active Codex session lease can still terminalize');
+    }
+    if (session.runner_launch_lease_id !== undefined) {
+      const launchLease = await repository.getCodexLaunchLeasePublicStatus({ launch_lease_id: session.runner_launch_lease_id });
+      if (launchLease !== undefined && launchLease.expires_at > now && (launchLease.status === 'active' || launchLease.status === 'materialized')) {
+        throw new DomainError('workflow_execution_writer_still_active', 'Active Codex launch lease can still terminalize');
+      }
+    }
+    if (session.runner_runtime_job_id !== undefined) {
+      const runtimeJob = await repository.getCodexRuntimeJob({ runtime_job_id: session.runner_runtime_job_id });
+      if (runtimeJob !== undefined && runtimeJob.status !== 'terminal') {
+        throw new DomainError('workflow_execution_writer_still_active', 'Active Codex session runner can still terminalize');
+      }
+    }
+    const activeRunSessions = (await repository.listRunSessions()).filter((runSession) => runSession.codex_session_id === session.id);
+    for (const runSession of activeRunSessions) {
+      const runtimeJobId = runSession.runtime_metadata?.remote_runtime_job_id;
+      if (runtimeJobId === undefined) continue;
+      const runtimeJob = await repository.getCodexRuntimeJob({ runtime_job_id: runtimeJobId });
+      if (runtimeJob === undefined || runtimeJob.status === 'terminal') continue;
+      const runWorkerLease = await repository.getRunWorkerLease(runSession.id);
+      const launchLease = await repository.getCodexLaunchLeasePublicStatus({ launch_lease_id: runtimeJob.launch_lease_id });
+      if (
+        (runWorkerLease !== undefined && this.runWorkerLeaseIsActive(runWorkerLease, runtimeJob, now)) ||
+        (launchLease !== undefined && this.codexLaunchLeaseIsActive(launchLease, runtimeJob, now))
+      ) {
+        throw new DomainError('workflow_execution_writer_still_active', 'Active run worker can still terminalize');
+      }
+    }
+  }
+
+  private async determineAbandonNewSessionFallbackForWorkflow(
+    repository: DeliveryRepository,
+    workflow: PlanItemWorkflow,
+  ): Promise<ReturnType<typeof determineAbandonNewSessionFallback>> {
+    const executionPackage =
+      workflow.execution_package_id === undefined ? undefined : await repository.getExecutionPackage(workflow.execution_package_id);
+    const currentReviewPacket = await this.currentReviewPacketForAbandonFallback(repository, workflow, executionPackage);
+    const hasValidExecutionReadiness = await this.hasValidExecutionReadinessForAbandonFallback(repository, workflow, executionPackage);
+    const implementationPlanRevision =
+      workflow.active_implementation_plan_doc_revision_id === undefined
+        ? undefined
+        : await repository.getExecutionPlanRevision(workflow.active_implementation_plan_doc_revision_id);
+    const specRevision =
+      workflow.active_spec_doc_revision_id === undefined ? undefined : await repository.getSpecRevision(workflow.active_spec_doc_revision_id);
+    const boundaryRevision =
+      workflow.active_boundary_summary_revision_id === undefined
+        ? undefined
+        : await repository.getBoundarySummaryRevisionById(workflow.active_boundary_summary_revision_id);
+    const implementationPlan =
+      implementationPlanRevision === undefined ? undefined : await repository.getExecutionPlan(implementationPlanRevision.execution_plan_id);
+    const spec = specRevision === undefined ? undefined : await repository.getSpec(specRevision.spec_id);
+    const hasApprovedImplementationPlan =
+      implementationPlanRevision !== undefined &&
+      this.isOwnedExecutionPlanRevision(workflow, implementationPlanRevision) &&
+      implementationPlan?.approved_revision_id === implementationPlanRevision.id &&
+      implementationPlan.approved_at !== undefined &&
+      implementationPlan.approved_by_actor_id !== undefined;
+    const hasApprovedSpec =
+      specRevision !== undefined &&
+      this.isOwnedDocumentRevision(workflow, specRevision) &&
+      spec?.approved_revision_id === specRevision.id &&
+      spec.approved_at !== undefined &&
+      spec.approved_by_actor_id !== undefined;
+    const currentReviewPacketNextAction =
+      currentReviewPacket === undefined
+        ? undefined
+        : currentReviewPacket.status === 'completed' && currentReviewPacket.decision === 'changes_requested'
+          ? 'request_fix'
+          : 'respond_to_review';
+    return determineAbandonNewSessionFallback({
+      ...(currentReviewPacketNextAction === undefined ? {} : { current_review_packet_next_action: currentReviewPacketNextAction }),
+      has_valid_execution_readiness: hasValidExecutionReadiness,
+      has_unapproved_implementation_plan_doc:
+        implementationPlanRevision !== undefined &&
+        this.isOwnedExecutionPlanRevision(workflow, implementationPlanRevision) &&
+        !hasApprovedImplementationPlan,
+      has_approved_spec_doc: hasApprovedSpec,
+      has_unapproved_spec_doc:
+        specRevision !== undefined &&
+        this.isOwnedDocumentRevision(workflow, specRevision) &&
+        !hasApprovedSpec,
+      has_approved_boundary_summary:
+        boundaryRevision !== undefined &&
+        this.isOwnedDocumentRevision(workflow, boundaryRevision) &&
+        this.recordApprovedAt(boundaryRevision) !== undefined,
+    });
+  }
+
+  private async currentReviewPacketForAbandonFallback(
+    repository: DeliveryRepository,
+    workflow: PlanItemWorkflow,
+    executionPackage: ExecutionPackage | undefined,
+  ): Promise<ReviewPacket | undefined> {
+    if (
+      executionPackage === undefined ||
+      executionPackage.workflow_id !== workflow.id ||
+      executionPackage.codex_session_id !== workflow.active_codex_session_id ||
+      executionPackage.last_run_session_id === undefined ||
+      workflow.active_spec_doc_revision_id === undefined ||
+      workflow.active_implementation_plan_doc_revision_id === undefined
+    ) {
+      return undefined;
+    }
+    return repository.findCurrentReviewPacketForWorkflow({
+      workflow_id: workflow.id,
+      execution_package_id: executionPackage.id,
+      execution_package_version: executionPackage.execution_package_version ?? executionPackage.version,
+      previous_run_session_id: executionPackage.last_run_session_id,
+      approved_spec_revision_id: workflow.active_spec_doc_revision_id,
+      approved_implementation_plan_revision_id: workflow.active_implementation_plan_doc_revision_id,
+      allowed_statuses: ['ready', 'in_review', 'completed'],
+      allowed_completed_decisions: ['changes_requested'],
+    });
+  }
+
+  private async hasValidExecutionReadinessForAbandonFallback(
+    repository: DeliveryRepository,
+    workflow: PlanItemWorkflow,
+    executionPackage: ExecutionPackage | undefined,
+  ): Promise<boolean> {
+    if (
+      executionPackage === undefined ||
+      executionPackage.workflow_id !== workflow.id ||
+      executionPackage.codex_session_id !== workflow.active_codex_session_id
+    ) {
+      return false;
+    }
+    try {
+      await this.requireCurrentExecutionReadinessRecord(repository, workflow, executionPackage);
+      return true;
+    } catch (error) {
+      if (error instanceof DomainError) return false;
+      throw error;
+    }
+  }
+
+  private async workflowRecoveryOptions(repository: DeliveryRepository, workflow: PlanItemWorkflow): Promise<PlanItemWorkflowRecoveryOption[]> {
+    const continueSameSessionOption = await this.workflowContinueSameSessionRecoveryOption(repository, workflow);
+    const canAbandonNewSession = workflow.status === 'blocked';
+    const abandonFallback = canAbandonNewSession
+      ? await this.determineAbandonNewSessionFallbackForWorkflow(repository, workflow)
+      : undefined;
+    const abandonNextAction =
+      abandonFallback === undefined ? undefined : this.publicAbandonNewSessionNextAction(abandonFallback.recommended_next_action);
+    return [
+      continueSameSessionOption,
+      {
+        action_id: 'abandon_new_session',
+        enabled: canAbandonNewSession,
+        ...(abandonNextAction === undefined ? {} : { next_action: abandonNextAction }),
+        ...(canAbandonNewSession
+          ? {}
+          : {
+              blocker_code: 'workflow_not_blocked',
+              warning_copy: 'Abandon and start a new session is only available for blocked workflows.',
+            }),
+        required_confirmation_kind: 'typed_phrase',
+      },
+      {
+        action_id: 'archive_workflow',
+        enabled: workflow.status !== 'archived',
+        ...(workflow.status === 'archived'
+          ? {
+              blocker_code: 'workflow_already_archived',
+              warning_copy: 'The workflow is already archived.',
+            }
+          : {}),
+        required_confirmation_kind: 'typed_phrase',
+      },
+      {
+        action_id: 'fork_unavailable',
+        enabled: false,
+        blocker_code: 'workflow_fork_not_implemented',
+        warning_copy: 'Fork recovery is outside this wave.',
+        required_confirmation_kind: 'none',
+      },
+    ];
+  }
+
+  private async workflowContinueSameSessionRecoveryOption(
+    repository: DeliveryRepository,
+    workflow: PlanItemWorkflow,
+  ): Promise<PlanItemWorkflowRecoveryOption> {
+    const disabled = (blockerCode: string): PlanItemWorkflowRecoveryOption => ({
+      action_id: 'continue_same_session',
+      enabled: false,
+      blocker_code: blockerCode,
+      warning_copy: this.continueSameSessionWarningCopy(blockerCode),
+      required_confirmation_kind: 'none',
+    });
+    if (workflow.status !== 'execution_running' && !(workflow.status === 'blocked' && workflow.previous_status === 'execution_running')) {
+      return disabled('workflow_execution_not_active');
+    }
+    try {
+      const session = await this.requireActiveSession(repository, workflow);
+      const executionPackage = this.requireFound(
+        await repository.getExecutionPackage(this.requireString(workflow.execution_package_id, 'Workflow execution package is missing')),
+        `ExecutionPackage ${workflow.execution_package_id}`,
+      );
+      const runSession = this.requireFound(
+        await repository.findActiveRunSessionForPackage(executionPackage.id),
+        `active RunSession for ExecutionPackage ${executionPackage.id}`,
+      );
+      const runtimeJob = this.requireFound(
+        await repository.getCodexRuntimeJob({
+          runtime_job_id: this.requireString(runSession.runtime_metadata?.remote_runtime_job_id, 'Workflow execution runtime job is missing'),
+        }),
+        `CodexRuntimeJob ${runSession.runtime_metadata?.remote_runtime_job_id}`,
+      );
+      const decision = await this.classifyExecutionContinuationReadOnly(repository, {
+        workflow,
+        session,
+        executionPackage,
+        runSession,
+        runtimeJob,
+      });
+      if (decision.mode === 'reject') {
+        return disabled(decision.code);
+      }
+      return {
+        action_id: 'continue_same_session',
+        enabled: true,
+        required_confirmation_kind: 'none',
+      };
+    } catch (error) {
+      if (error instanceof DomainError) {
+        return disabled(error.code);
+      }
+      throw error;
+    }
+  }
+
+  private continueSameSessionWarningCopy(blockerCode: string): string {
+    switch (blockerCode) {
+      case 'workflow_execution_not_active':
+        return 'There is no active interrupted execution to continue.';
+      case 'workflow_execution_not_ready_for_input':
+        return 'The current execution worker is not ready for a continuation input yet.';
+      case 'workflow_execution_writer_still_active':
+        return 'The current execution writer can still terminalize, so starting another writer is unsafe.';
+      case 'workflow_execution_cancel_pending':
+        return 'The current execution cancellation can still terminalize; recover explicitly after cancellation is settled.';
+      case 'workflow_execution_recovery_required':
+        return 'The current execution lineage does not satisfy same-session recovery predicates.';
+      case 'workflow_evidence_missing':
+        return 'Required execution runtime evidence is missing for same-session continuation.';
+      default:
+        return 'Same-session continuation is not available for the current workflow state.';
+    }
+  }
+
+  private publicAbandonNewSessionNextAction(nextAction: NonNullable<AbandonNewSessionPublicNextAction>): AbandonNewSessionPublicNextAction {
+    if (abandonNewSessionPublicNextActions.has(nextAction)) {
+      return nextAction;
+    }
+    throw new DomainError(
+      'workflow_invalid_transition',
+      `workflow_invalid_transition: abandon/new-session next action ${nextAction} is not public-safe`,
+    );
   }
 
   private publicQueuedAction(workflow: PlanItemWorkflowPublicDto, actionId: string) {

@@ -168,6 +168,24 @@ describe('delivery loop contracts', () => {
     },
     review_context: {
       latest_decision: 'changes_requested',
+      review_packet_id: 'review-packet-1',
+      review_packet_digest: `sha256:${'a'.repeat(64)}`,
+      previous_run_session_id: 'run-previous-1',
+      approved_spec_revision_id: 'spec-revision-1',
+      approved_implementation_plan_revision_id: 'plan-revision-1',
+      execution_package_id: 'exec-package-1',
+      execution_package_version: 3,
+      path_policy_digest: `sha256:${'b'.repeat(64)}`,
+      required_checks: validRequiredChecks,
+      evidence_refs: [
+        {
+          id: 'evidence-1',
+          ref_kind: 'github_comment_url',
+          display_text: 'Reviewer comment',
+          digest: `sha256:${'c'.repeat(64)}`,
+        },
+      ],
+      review_response_ids: ['review-response-1'],
       requested_changes: [
         {
           title: 'Clarify artifact refs',
@@ -882,8 +900,34 @@ describe('delivery loop contracts', () => {
 
     expect(parsed.executor_type).toBe('local_codex');
     expect(parsed.required_checks[0]?.blocks_review).toBe(true);
+    expect(parsed.review_context.review_packet_id).toBe('review-packet-1');
+    expect(parsed.review_context.evidence_refs).toHaveLength(1);
     expect(parsed.review_context.requested_changes).toHaveLength(1);
     expect(parsed.idempotency_key).toBe('exec-package-1:run-session-1:748c32b');
+  });
+
+  it.each([
+    'review_packet_id',
+    'review_packet_digest',
+    'previous_run_session_id',
+    'approved_spec_revision_id',
+    'approved_implementation_plan_revision_id',
+    'execution_package_id',
+    'execution_package_version',
+    'path_policy_digest',
+    'required_checks',
+    'evidence_refs',
+    'review_response_ids',
+  ] as const)('rejects changes-requested review context missing %s', (field) => {
+    const reviewContext = { ...validRunSpec.review_context };
+    delete reviewContext[field];
+
+    expect(
+      runSpecSchema.safeParse({
+        ...validRunSpec,
+        review_context: reviewContext,
+      }).success,
+    ).toBe(false);
   });
 
   it('rejects run specs with divergent required checks', () => {

@@ -326,6 +326,7 @@ export const codex_session_turns = pgTable(
     leaseId: uuid('lease_id'),
     leaseEpoch: integer('lease_epoch'),
     automationActionRunId: uuid('automation_action_run_id'),
+    planItemWorkflowActionId: uuid('plan_item_workflow_action_id').references(() => plan_item_workflow_queued_actions.id),
     runtimeJobId: uuid('runtime_job_id'),
     createdByActorId: uuid('created_by_actor_id')
       .notNull()
@@ -338,6 +339,7 @@ export const codex_session_turns = pgTable(
     index('codex_session_turns_workflow_created_idx').on(table.workflowId, table.createdAt),
     index('codex_session_turns_runtime_job_idx').on(table.runtimeJobId),
     index('codex_session_turns_action_run_idx').on(table.automationActionRunId),
+    index('codex_session_turns_workflow_action_idx').on(table.planItemWorkflowActionId),
   ],
 );
 
@@ -356,12 +358,24 @@ export const codex_session_stale_terminalization_attempts = pgTable(
     expectedInputCapsuleDigest: text('expected_input_capsule_digest'),
     attemptedOutputCapsuleDigest: text('attempted_output_capsule_digest'),
     attemptedCodexThreadIdDigest: text('attempted_codex_thread_id_digest'),
+    workflowId: uuid('workflow_id').references(() => plan_item_workflows.id),
+    runSessionId: uuid('run_session_id'),
+    runtimeJobId: uuid('runtime_job_id'),
+    expectedWorkflowStatus: text('expected_workflow_status'),
+    actualWorkflowStatus: text('actual_workflow_status'),
+    expectedRunSessionStatus: text('expected_run_session_status'),
+    actualRunSessionStatus: text('actual_run_session_status'),
+    expectedRunSessionUpdatedAt: timestampColumn('expected_run_session_updated_at'),
+    actualRunSessionUpdatedAt: timestampColumn('actual_run_session_updated_at'),
+    expectedCodexThreadIdDigest: text('expected_codex_thread_id_digest'),
     failureCode: text('failure_code').notNull(),
     createdAt: timestampColumn('created_at').notNull(),
   },
   (table) => [
     index('codex_session_stale_terminalization_attempts_session_idx').on(table.codexSessionId, table.createdAt),
     index('codex_session_stale_terminalization_attempts_turn_idx').on(table.codexSessionTurnId),
+    index('codex_session_stale_terminalization_attempts_workflow_idx').on(table.workflowId, table.createdAt),
+    index('codex_session_stale_terminalization_attempts_run_idx').on(table.runSessionId),
   ],
 );
 

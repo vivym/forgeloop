@@ -648,6 +648,163 @@ describe('Development Plan routes', () => {
     expect(document.body.textContent).not.toMatch(/thread-raw|artifact:\/\/internal|\/Users\/|lease-token|worker_id|credential/i);
   });
 
+  it('renders Wave 7 execution, code-review, and recovery controls from public workflow projection', async () => {
+    const user = userEvent.setup();
+    const posted: string[] = [];
+    const digest = `sha256:${'7'.repeat(64)}`;
+    const workflow = workflowProjectionFixture({
+      status: 'code_review',
+      queued_actions: [],
+      timeline_events: [],
+      readiness: { state: 'ready', can_evaluate: false, blocker_codes: [] },
+      blockers: [],
+      execution_run_summary: workflowExecutionRunSummaryFixture({
+        run_session_id: 'run-session-current',
+        status: 'succeeded',
+        codex_thread_id_digest: `sha256:${'8'.repeat(64)}`,
+      }),
+      attempt_history: [
+        {
+          run_session_id: 'run-session-current',
+          attempt_kind: 'first_execution',
+          status: 'succeeded',
+          continuation_events: [
+            {
+              queued_action_id: 'action-continue-1',
+              continuation_kind: 'relaunch_after_fencing',
+              created_at: '2026-05-18T00:27:00.000Z',
+            },
+          ],
+          created_at: '2026-05-18T00:25:00.000Z',
+          updated_at: '2026-05-18T00:28:00.000Z',
+        },
+      ],
+      current_review_packet: {
+        id: 'review-packet-current',
+        digest,
+        previous_run_session_id: 'run-session-current',
+        status: 'completed',
+        decision: 'changes_requested',
+        summary: 'Reviewer requested targeted UI changes.',
+        evidence_refs: [
+          {
+            id: 'evidence-review-comment-1',
+            ref_kind: 'github_comment_url',
+            visibility: 'public',
+            display_text: 'Reviewer comment on visual hierarchy',
+            digest: `sha256:${'9'.repeat(64)}`,
+            url: 'https://github.com/org/repo/pull/1#discussion_r1',
+          },
+        ],
+      },
+      latest_review_response: {
+        id: 'review-response-current',
+        review_packet_id: 'review-packet-current',
+        previous_run_session_id: 'run-session-current',
+        status: 'succeeded',
+        summary: 'Codex explained the requested UI fix.',
+        response_markdown: 'The layout issue is valid and should be fixed in a follow-up run.',
+        created_at: '2026-05-18T00:31:00.000Z',
+      },
+      recovery_options: [
+        { action_id: 'continue_same_session', enabled: true, required_confirmation_kind: 'none' },
+        {
+          action_id: 'abandon_new_session',
+          enabled: true,
+          next_action: 'request_fix',
+          warning_copy: 'Starting a new session loses Codex thread continuity.',
+          required_confirmation_kind: 'typed_phrase',
+        },
+        {
+          action_id: 'fork_unavailable',
+          enabled: false,
+          blocker_code: 'workflow_fork_deferred_until_wave_8',
+          warning_copy: 'Forking a workflow session is unavailable before Wave 8.',
+          required_confirmation_kind: 'none',
+        },
+      ],
+    });
+    const screen = await renderRoute(`/development-plans/${developmentPlan.id}/items/${developmentPlanItem.id}/execution`, {
+      actorId: 'actor-tech',
+      apiOverrides: {
+        [`GET /query/development-plans/${developmentPlan.id}/items/${developmentPlanItem.id}`]: itemOverride(
+          {
+            boundary_status: 'approved',
+            spec_status: 'approved',
+            implementation_plan_status: 'approved',
+            execution_status: 'completed',
+            review_status: 'changes_requested',
+          },
+          {
+            item: {
+              plan_item_workflow: workflow,
+            },
+          },
+        ),
+        'POST /plan-item-workflows/workflow-product-workspace-preview/execution/continue': ({ init }) => {
+          posted.push(`continue:${JSON.stringify(parseRequestBody(init))}`);
+          return workflow;
+        },
+        'POST /plan-item-workflows/workflow-product-workspace-preview/code-review/respond': ({ init }) => {
+          posted.push(`respond:${JSON.stringify(parseRequestBody(init))}`);
+          return workflow;
+        },
+        'POST /plan-item-workflows/workflow-product-workspace-preview/code-review/request-fix': ({ init }) => {
+          posted.push(`fix:${JSON.stringify(parseRequestBody(init))}`);
+          return workflow;
+        },
+        'POST /plan-item-workflows/workflow-product-workspace-preview/recovery/abandon-and-new-session': ({ init }) => {
+          posted.push(`abandon:${JSON.stringify(parseRequestBody(init))}`);
+          return workflow;
+        },
+      },
+    });
+
+    expect(await screen.findByRole('heading', { name: developmentPlanItem.title })).toBeTruthy();
+    const supervision = screen.getByRole('region', { name: /execution supervision/i });
+    expect(supervision.textContent).toContain('run-session-current');
+    expect(supervision.textContent).toContain('First Execution');
+    expect(supervision.textContent).toContain(`sha256:${'8'.repeat(64)}`);
+    expect(screen.getByRole('region', { name: /code review lens/i }).textContent).toContain('review-packet-current');
+    expect(screen.getByRole('region', { name: /code review lens/i }).textContent).toContain('Reviewer comment on visual hierarchy');
+    expect(screen.getByRole('region', { name: /code review lens/i }).textContent).toContain('review-response-current');
+    expect(screen.getByRole('region', { name: /code review lens/i }).textContent).toContain('Codex explained the requested UI fix.');
+    expect(screen.getByRole('region', { name: /code review lens/i }).textContent).toContain('should be fixed in a follow-up run');
+    expect(screen.getByRole('region', { name: /recovery panel/i }).textContent).toMatch(/fork unavailable|wave 8/i);
+
+    await user.click(screen.getByRole('button', { name: /^continue execution$/i }));
+    await user.type(screen.getByRole('textbox', { name: /review response prompt/i }), 'Respond with concise reasoning.');
+    await user.click(screen.getByRole('button', { name: /^respond to review$/i }));
+    await user.type(screen.getByRole('textbox', { name: /fix instruction/i }), 'Fix the requested layout issue.');
+    await user.click(screen.getByRole('button', { name: /^request fix$/i }));
+    await user.type(screen.getByRole('textbox', { name: /abandon reason/i }), 'Current session state is unsafe.');
+    await user.type(screen.getByRole('textbox', { name: /type confirmation phrase/i }), 'abandon current session and start new session');
+    await user.click(screen.getByRole('button', { name: /^abandon current session$/i }));
+
+    expect(posted).toEqual([
+      `continue:${JSON.stringify({ actor_id: 'actor-tech' })}`,
+      `respond:${JSON.stringify({
+        actor_id: 'actor-tech',
+        expected_review_packet_id: 'review-packet-current',
+        expected_review_packet_digest: digest,
+        response_prompt_markdown: 'Respond with concise reasoning.',
+      })}`,
+      `fix:${JSON.stringify({
+        actor_id: 'actor-tech',
+        expected_review_packet_id: 'review-packet-current',
+        expected_review_packet_digest: digest,
+        fix_instruction_markdown: 'Fix the requested layout issue.',
+      })}`,
+      `abandon:${JSON.stringify({
+        actor_id: 'actor-tech',
+        next_action: 'request_fix',
+        confirmation_phrase: 'abandon current session and start new session',
+        reason: 'Current session state is unsafe.',
+      })}`,
+    ]);
+    expect(document.body.textContent).not.toMatch(/codex_thread_id|thread-raw|artifact:\/\/internal|\/Users\/|lease-token|worker_id|credential/i);
+  });
+
   it('disables artifact review and readiness actions outside their workflow stages with public reasons', async () => {
     const user = userEvent.setup();
     const screen = await renderRoute(`/development-plans/${developmentPlan.id}/items/${developmentPlanItem.id}/execution`, {

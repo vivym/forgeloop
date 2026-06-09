@@ -198,6 +198,21 @@ describe('no legacy Web UI baggage', () => {
     );
   });
 
+  it('does not expose Wave 7 runtime control or raw runtime fields in the Plan Item workflow workspace', () => {
+    const source = readFileSync('apps/web/src/features/development-plans/plan-item-workflow-workspace.tsx', 'utf8');
+
+    expect(source).toContain('commandMutations.continueExecution');
+    expect(source).toContain('commandMutations.respondToReview');
+    expect(source).toContain('commandMutations.requestFix');
+    expect(source).toContain('commandMutations.abandonNewSession');
+    expect(source).not.toMatch(/plan-item-workflows\/[^"'`\s]+\/run-sessions\/[^"'`\s]+\/(?:input|cancel|resume|retry|rerun)/);
+    expect(source).not.toMatch(/plan-item-workflows\/[^"'`\s]+\/(?:fork|select-fork|select-active-fork)/);
+    expect(source).not.toMatch(/\b(?:automation_action_run|action_run_id)\b/);
+    expect(source).not.toMatch(
+      /\bcodex_thread_id\b(?!_digest)|\b(?:active_)?codex_session_id\b|\bcodex_session_turn_id\b|\b(?:lease_token|worker_id|credential_binding_id|runtime_profile_id)\b|artifact:\/\/|\/Users\//,
+    );
+  });
+
   it('removes old Web entry, API, state, and stylesheet files', () => {
     for (const path of [
       'apps/web/src/App.tsx',
