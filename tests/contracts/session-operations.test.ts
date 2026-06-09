@@ -3,13 +3,17 @@ import { z } from 'zod';
 import {
   observedAbsentSchema,
   observedPresentSchema,
+  observedRefSchema,
+  operatorSessionHealthProjectionSchema,
   planItemSessionDiagnosticsSchema,
+  planItemSessionHealthSeveritySchema,
   planItemSessionHealthStateSchema,
   recoverSessionRequestSchema,
   scavengeSessionOperationsRequestSchema,
   sessionOperationsFilterSchema,
   sessionOperationsHealthQuerySchema,
   sessionRecoveryCandidatePredicateSchema,
+  sessionRecoveryRecordDtoSchema,
 } from '@forgeloop/contracts';
 
 const iso = '2026-06-10T00:00:00.000Z';
@@ -100,6 +104,21 @@ const candidatePredicate = {
   }),
 } as const;
 
+const predicateSummary = {
+  operation_idempotency_key: 'recover:session-1:predicate-1',
+  projection_digest: digest('0'),
+  expected_health_state: 'blocked_stale_lease',
+  observed_at: iso,
+  workflow_state: 'present',
+  session_state: 'present',
+  active_lease_state: 'present',
+  pending_queued_action_state: 'present',
+  latest_turn_state: 'present',
+  runtime_job_state: 'present',
+  run_session_state: 'present',
+  latest_capsule_state: 'present',
+} as const;
+
 describe('session operations contracts', () => {
   it('parses observed absent refs', () => {
     expect(observedAbsentSchema.parse({ checked: true, state: 'absent' })).toEqual(absent);
@@ -108,6 +127,15 @@ describe('session operations contracts', () => {
   it('rejects absent refs when a present ref is required', () => {
     expect(observedPresentSchema).toBeDefined();
     expect(() => observedPresentSchema({ id: z.string() }).parse(absent)).toThrow();
+  });
+
+  it('parses observed refs and rejects unchecked ref shapes', () => {
+    const refSchema = observedRefSchema({ id: z.string() });
+
+    expect(refSchema.parse(absent)).toEqual(absent);
+    expect(refSchema.parse(present({ id: 'object-1' }))).toEqual(present({ id: 'object-1' }));
+    expect(refSchema.safeParse({ state: 'absent' }).success).toBe(false);
+    expect(refSchema.safeParse({ checked: false, state: 'absent' }).success).toBe(false);
   });
 
   it('parses every Plan Item session health state', () => {
@@ -124,6 +152,14 @@ describe('session operations contracts', () => {
 
     for (const state of planItemSessionHealthStateSchema.options) {
       expect(planItemSessionHealthStateSchema.parse(state)).toBe(state);
+    }
+  });
+
+  it('parses every Plan Item session health severity', () => {
+    expect(planItemSessionHealthSeveritySchema.options).toEqual(['none', 'info', 'warning', 'blocked', 'critical']);
+
+    for (const severity of planItemSessionHealthSeveritySchema.options) {
+      expect(planItemSessionHealthSeveritySchema.parse(severity)).toBe(severity);
     }
   });
 
@@ -224,22 +260,50 @@ describe('session operations contracts', () => {
     });
   });
 
-  it('requires recover session operation and candidate predicate fencing', () => {
+  it('accepts authorized operator projections with candidate predicates', () => {
     expect(
-      recoverSessionRequestSchema.parse({
-        operation: 'recover',
+      operatorSessionHealthProjectionSchema.parse({
+        workflow_id: 'workflow-1',
+        development_plan_id: 'plan-1',
+        development_plan_item_id: 'plan-item-1',
         session_id: 'session-1',
-        reason: 'Recover the fenced session.',
-        operation_idempotency_key: 'recover:session-1:predicate-1',
+        health_state: 'blocked_stale_lease',
+        severity: 'blocked',
+        diagnostics: {
+          health_state: 'blocked_stale_lease',
+          severity: 'blocked',
+          summary: 'The active session lease is stale.',
+          observed_at: iso,
+          blocker_codes: ['stale_lease'],
+        },
         candidate_predicate: candidatePredicate,
+        observed_at: iso,
       }),
     ).toMatchObject({
-      operation: 'recover',
-      operation_idempotency_key: 'recover:session-1:predicate-1',
       candidate_predicate: {
         operation_idempotency_key: 'recover:session-1:predicate-1',
       },
     });
+  });
+
+  it('requires recover session operation and candidate predicate fencing', () => {
+    for (const operation of ['recover', 'mark_unrecoverable'] as const) {
+      expect(
+        recoverSessionRequestSchema.parse({
+          operation,
+          session_id: 'session-1',
+          reason: 'Recover the fenced session.',
+          operation_idempotency_key: 'recover:session-1:predicate-1',
+          candidate_predicate: candidatePredicate,
+        }),
+      ).toMatchObject({
+        operation,
+        operation_idempotency_key: 'recover:session-1:predicate-1',
+        candidate_predicate: {
+          operation_idempotency_key: 'recover:session-1:predicate-1',
+        },
+      });
+    }
 
     expect(
       recoverSessionRequestSchema.safeParse({
@@ -277,6 +341,34 @@ describe('session operations contracts', () => {
       max_lease_age_seconds: 3600,
       limit: 25,
     });
+  });
+
+  it('exposes recovery predicate summaries but rejects full predicates on recovery records', () => {
+    const record = {
+      id: 'recovery-record-1',
+      workflow_id: 'workflow-1',
+      session_id: 'session-1',
+      operation_type: 'recover_session',
+      status: 'succeeded',
+      reason: 'Recovered using the fenced predicate.',
+      operation_idempotency_key: 'recover:session-1:predicate-1',
+      predicate_summary: predicateSummary,
+      created_at: iso,
+    } as const;
+
+    expect(sessionRecoveryRecordDtoSchema.parse(record)).toMatchObject({
+      predicate_summary: {
+        operation_idempotency_key: 'recover:session-1:predicate-1',
+        projection_digest: digest('0'),
+      },
+    });
+
+    expect(
+      sessionRecoveryRecordDtoSchema.safeParse({
+        ...record,
+        candidate_predicate: candidatePredicate,
+      }).success,
+    ).toBe(false);
   });
 
   it('keeps public diagnostics free of operator-only recovery material', () => {
