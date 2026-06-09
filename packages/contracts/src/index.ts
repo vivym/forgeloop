@@ -11,6 +11,7 @@ export * from './delivery-runtime-readiness.js';
 export * from './release.js';
 export * from './run-event-rendering.js';
 export * from './review.js';
+export * from './session-operations.js';
 export * from './web-product-query.js';
 export * from './work-item-delivery-readiness.js';
 export * from './work-item-intake.js';
