@@ -15,6 +15,8 @@ const nonEmpty = z.string().trim().min(1);
 const isoDateTimeSchema = z.string().datetime();
 const safeDigestSchema = z.string().regex(/^sha256:[a-f0-9]{64}$/);
 const nonNegativeIntegerSchema = z.number().int().nonnegative();
+const coerceNonNegativeIntegerSchema = z.coerce.number().int().nonnegative();
+const coercePositiveIntegerSchema = z.coerce.number().int().positive();
 
 export const planItemSessionHealthStateSchema = z.enum([
   'healthy',
@@ -98,8 +100,8 @@ const pendingQueuedActionPredicateValueShape = {
   kind: planItemWorkflowQueuedActionKindSchema,
   status: planItemWorkflowQueuedActionStatusSchema,
   idempotency_key: safeDigestSchema,
-  codex_session_turn_id: nonEmpty.optional(),
-  expected_input_capsule_digest: safeDigestSchema.optional(),
+  codex_session_turn_id: nonEmpty.nullable(),
+  expected_input_capsule_digest: safeDigestSchema.nullable(),
   updated_at: isoDateTimeSchema.optional(),
 } satisfies z.ZodRawShape;
 
@@ -138,7 +140,11 @@ const latestCapsulePredicateValueShape = {
 
 export const sessionRecoveryCandidatePredicateSchema = z
   .object({
-    predicate_key: nonEmpty,
+    codex_session_id: nonEmpty,
+    workflow_id: nonEmpty,
+    expected_health_state: planItemSessionHealthStateSchema,
+    operation_idempotency_key: nonEmpty,
+    projection_digest: safeDigestSchema,
     workflow: observedRefSchema(workflowPredicateValueShape),
     session: observedRefSchema(sessionPredicateValueShape),
     active_lease: observedRefSchema(activeLeasePredicateValueShape),
@@ -149,28 +155,7 @@ export const sessionRecoveryCandidatePredicateSchema = z
     latest_capsule: observedRefSchema(latestCapsulePredicateValueShape),
     observed_at: isoDateTimeSchema,
   })
-  .strict()
-  .superRefine((predicate, ctx) => {
-    if (predicate.pending_queued_action.state !== 'present') {
-      return;
-    }
-
-    if (predicate.pending_queued_action.value.codex_session_turn_id === undefined) {
-      ctx.addIssue({
-        code: 'custom',
-        path: ['pending_queued_action', 'value', 'codex_session_turn_id'],
-        message: 'present queued action predicates require codex_session_turn_id fencing',
-      });
-    }
-
-    if (predicate.pending_queued_action.value.expected_input_capsule_digest === undefined) {
-      ctx.addIssue({
-        code: 'custom',
-        path: ['pending_queued_action', 'value', 'expected_input_capsule_digest'],
-        message: 'present queued action predicates require expected_input_capsule_digest fencing',
-      });
-    }
-  });
+  .strict();
 export type SessionRecoveryCandidatePredicate = z.infer<typeof sessionRecoveryCandidatePredicateSchema>;
 
 export const planItemSessionDiagnosticsSchema = z
@@ -212,9 +197,9 @@ export const sessionOperationsFilterSchema = z
     candidate_only: z.boolean().optional(),
     include_recovered: z.boolean().optional(),
     include_unrecoverable: z.boolean().optional(),
-    min_lease_age_seconds: nonNegativeIntegerSchema.optional(),
-    max_lease_age_seconds: nonNegativeIntegerSchema.optional(),
-    limit: z.number().int().positive().optional(),
+    min_lease_age_seconds: coerceNonNegativeIntegerSchema.optional(),
+    max_lease_age_seconds: coerceNonNegativeIntegerSchema.optional(),
+    limit: coercePositiveIntegerSchema.optional(),
   })
   .strict()
   .superRefine((filters, ctx) => {
@@ -247,9 +232,9 @@ export const sessionOperationsHealthQuerySchema = z
     candidate_only: coerceBooleanQuerySchema.optional(),
     include_recovered: coerceBooleanQuerySchema.optional(),
     include_unrecoverable: coerceBooleanQuerySchema.optional(),
-    min_lease_age_seconds: z.coerce.number().int().nonnegative().optional(),
-    max_lease_age_seconds: z.coerce.number().int().nonnegative().optional(),
-    limit: z.coerce.number().int().positive().optional(),
+    min_lease_age_seconds: coerceNonNegativeIntegerSchema.optional(),
+    max_lease_age_seconds: coerceNonNegativeIntegerSchema.optional(),
+    limit: coercePositiveIntegerSchema.optional(),
   })
   .strict()
   .superRefine((query, ctx) => {
@@ -269,6 +254,7 @@ export type SessionOperationsHealthQuery = z.infer<typeof sessionOperationsHealt
 
 export const recoverSessionRequestSchema = z
   .object({
+    operation: z.enum(['recover', 'mark_unrecoverable']),
     session_id: nonEmpty,
     reason: nonEmpty,
     operation_idempotency_key: nonEmpty,
@@ -298,7 +284,9 @@ export const sessionRecoveryRecordDtoSchema = z
     operation_idempotency_key: nonEmpty,
     predicate_summary: z
       .object({
-        predicate_key: nonEmpty,
+        operation_idempotency_key: nonEmpty,
+        projection_digest: safeDigestSchema,
+        expected_health_state: planItemSessionHealthStateSchema,
         observed_at: isoDateTimeSchema,
         workflow_state: z.enum(['present', 'absent']),
         session_state: z.enum(['present', 'absent']),

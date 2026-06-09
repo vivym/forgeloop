@@ -5,7 +5,9 @@ import {
   observedPresentSchema,
   planItemSessionDiagnosticsSchema,
   planItemSessionHealthStateSchema,
+  recoverSessionRequestSchema,
   scavengeSessionOperationsRequestSchema,
+  sessionOperationsFilterSchema,
   sessionOperationsHealthQuerySchema,
   sessionRecoveryCandidatePredicateSchema,
 } from '@forgeloop/contracts';
@@ -26,7 +28,11 @@ const absent = {
 } as const;
 
 const candidatePredicate = {
-  predicate_key: 'recover:session-1:predicate-1',
+  codex_session_id: 'session-1',
+  workflow_id: 'workflow-1',
+  expected_health_state: 'blocked_stale_lease',
+  operation_idempotency_key: 'recover:session-1:predicate-1',
+  projection_digest: digest('0'),
   observed_at: iso,
   workflow: present({
     id: 'workflow-1',
@@ -58,8 +64,8 @@ const candidatePredicate = {
     status: 'queued',
     kind: 'continue_execution',
     idempotency_key: digest('4'),
-    codex_session_turn_id: 'turn-1',
-    expected_input_capsule_digest: digest('5'),
+    codex_session_turn_id: null,
+    expected_input_capsule_digest: null,
     updated_at: iso,
   }),
   latest_turn: present({
@@ -123,7 +129,11 @@ describe('session operations contracts', () => {
 
   it('requires full observed fencing material for recovery candidates', () => {
     expect(sessionRecoveryCandidatePredicateSchema.parse(candidatePredicate)).toMatchObject({
-      predicate_key: 'recover:session-1:predicate-1',
+      codex_session_id: 'session-1',
+      workflow_id: 'workflow-1',
+      expected_health_state: 'blocked_stale_lease',
+      operation_idempotency_key: 'recover:session-1:predicate-1',
+      projection_digest: digest('0'),
       workflow: { state: 'present' },
       session: { state: 'present' },
       active_lease: { state: 'present' },
@@ -137,9 +147,35 @@ describe('session operations contracts', () => {
 
     const { latest_capsule: _latestCapsule, ...missingLatestCapsule } = candidatePredicate;
     expect(sessionRecoveryCandidatePredicateSchema.safeParse(missingLatestCapsule).success).toBe(false);
+
+    for (const requiredField of [
+      'codex_session_id',
+      'workflow_id',
+      'expected_health_state',
+      'operation_idempotency_key',
+      'projection_digest',
+    ] as const) {
+      const { [requiredField]: _missingRequiredField, ...missingRequiredField } = candidatePredicate;
+      expect(sessionRecoveryCandidatePredicateSchema.safeParse(missingRequiredField).success).toBe(false);
+    }
+
+    expect(
+      sessionRecoveryCandidatePredicateSchema.safeParse({
+        ...candidatePredicate,
+        predicate_key: 'recover:session-1:predicate-1',
+      }).success,
+    ).toBe(false);
   });
 
-  it('rejects present queued action predicates without turn and input capsule fencing', () => {
+  it('requires nullable turn and input capsule keys on present queued action predicates', () => {
+    expect(sessionRecoveryCandidatePredicateSchema.parse(candidatePredicate).pending_queued_action).toMatchObject({
+      state: 'present',
+      value: {
+        codex_session_turn_id: null,
+        expected_input_capsule_digest: null,
+      },
+    });
+
     const result = sessionRecoveryCandidatePredicateSchema.safeParse({
       ...candidatePredicate,
       pending_queued_action: present({
@@ -158,11 +194,9 @@ describe('session operations contracts', () => {
       expect.arrayContaining([
         expect.objectContaining({
           path: ['pending_queued_action', 'value', 'codex_session_turn_id'],
-          message: 'present queued action predicates require codex_session_turn_id fencing',
         }),
         expect.objectContaining({
           path: ['pending_queued_action', 'value', 'expected_input_capsule_digest'],
-          message: 'present queued action predicates require expected_input_capsule_digest fencing',
         }),
       ]),
     );
@@ -186,7 +220,48 @@ describe('session operations contracts', () => {
     ).toMatchObject({
       mode: 'execute',
       confirm_execute: true,
-      candidates: [{ predicate_key: 'recover:session-1:predicate-1' }],
+      candidates: [{ operation_idempotency_key: 'recover:session-1:predicate-1' }],
+    });
+  });
+
+  it('requires recover session operation and candidate predicate fencing', () => {
+    expect(
+      recoverSessionRequestSchema.parse({
+        operation: 'recover',
+        session_id: 'session-1',
+        reason: 'Recover the fenced session.',
+        operation_idempotency_key: 'recover:session-1:predicate-1',
+        candidate_predicate: candidatePredicate,
+      }),
+    ).toMatchObject({
+      operation: 'recover',
+      operation_idempotency_key: 'recover:session-1:predicate-1',
+      candidate_predicate: {
+        operation_idempotency_key: 'recover:session-1:predicate-1',
+      },
+    });
+
+    expect(
+      recoverSessionRequestSchema.safeParse({
+        session_id: 'session-1',
+        reason: 'Recover the fenced session.',
+        operation_idempotency_key: 'recover:session-1:predicate-1',
+        candidate_predicate: candidatePredicate,
+      }).success,
+    ).toBe(false);
+  });
+
+  it('coerces numeric session operations filter fields from strings', () => {
+    expect(
+      sessionOperationsFilterSchema.parse({
+        min_lease_age_seconds: '60',
+        max_lease_age_seconds: '3600',
+        limit: '25',
+      }),
+    ).toMatchObject({
+      min_lease_age_seconds: 60,
+      max_lease_age_seconds: 3600,
+      limit: 25,
     });
   });
 
