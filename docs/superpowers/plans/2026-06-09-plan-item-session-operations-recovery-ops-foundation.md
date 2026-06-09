@@ -43,6 +43,18 @@ Out of scope:
 
 Keep this as one sequential plan. The core contract, persistence, API, and UI all depend on the same predicate and redaction semantics, so splitting the first slice would create duplicate health logic.
 
+## Acceptance Criteria Mapping
+
+| Spec requirement | Plan owner | Test owner |
+| --- | --- | --- |
+| Product-level health projection, public/operator/internal DTO split, and redaction | Tasks 1, 2, 4, 6, 7 | `tests/contracts/session-operations.test.ts`, `tests/domain/session-operations.test.ts`, `tests/api/session-operations.test.ts`, `tests/web/*` |
+| Recovery/scavenge candidate predicate with complete `ObservedRef` fencing | Tasks 1, 2, 4 | `tests/contracts/session-operations.test.ts`, `tests/domain/session-operations.test.ts`, `tests/api/session-operations.test.ts` |
+| Durable health, recovery records, retention pins, idempotency replay/conflict | Task 3 | `tests/db/session-operations-repository.test.ts`, `tests/db/schema.test.ts` |
+| Global operator health/scavenge discovery without pre-existing health rows | Tasks 3, 4 | `tests/db/session-operations-repository.test.ts`, `tests/api/session-operations.test.ts` |
+| Operator dashboard with scoped filters and scavenge execute controls | Tasks 1, 4, 6 | `tests/contracts/session-operations.test.ts`, `tests/api/session-operations.test.ts`, `tests/web/session-operations-routes.test.tsx` |
+| Plan Item local diagnostics without operator-only controls | Tasks 4, 7 | `tests/api/session-operations.test.ts`, `tests/web/development-plan-routes.test.tsx` |
+| No Codex invocation, no retired runtime bypasses, no direct DB scavenge script | Tasks 4, 8 | `tests/api/session-operations.test.ts`, `tests/smoke/*`, `pnpm check:codex-runtime-superpowers-no-baggage` |
+
 ## File Structure
 
 ### Contracts
@@ -70,7 +82,7 @@ Keep this as one sequential plan. The core contract, persistence, API, and UI al
 - Modify `packages/db/src/schema/plan-item-workflow.ts`
   - Add `plan_item_session_health`, `session_recovery_records`, and `capsule_retention_pins` tables near existing workflow/session tables because they are children of workflow/session/capsule state.
 - Modify `packages/db/src/schema/index.ts`
-  - Export new table definitions if needed by current schema barrel conventions.
+  - Export the new table definitions through the schema barrel.
 - Create: `packages/db/migrations/0006_session_operations_recovery_ops_foundation.sql`
   - Generated Drizzle migration for the new health, recovery, and retention pin tables.
 - Modify: `packages/db/migrations/meta/_journal.json`
@@ -148,7 +160,7 @@ Keep this as one sequential plan. The core contract, persistence, API, and UI al
 - Create `scripts/session-operations-scavenge.ts`
   - Thin operator wrapper that calls the Session Operations API for dry-run and execute modes; it must not read/write repository state directly.
 - Modify `scripts/check-codex-runtime-superpowers-no-baggage.ts`
-  - Add Session Operations module, web route, and runbook to strict scan roots/files if needed.
+  - Add Session Operations module, web route, scavenge wrapper, and runbook to strict scan roots/files.
 - Test `tests/smoke/codex-runtime-no-baggage-gate.test.ts`
   - Assert new routes do not expose raw runtime terms or retired bypasses.
 - Test `tests/smoke/session-operations-scavenge-script.test.ts`
@@ -164,7 +176,8 @@ Keep this as one sequential plan. The core contract, persistence, API, and UI al
 - Scavenge support in this first slice is API/dashboard/runbook support plus a thin operator script wrapper around the same API. Do not implement separate repository/direct-DB scavenge logic.
 - Checkpoint recovery is advisory only. It may record the latest safe checkpoint candidate, but must not mutate `PlanItemWorkflow.active_boundary_summary_revision_id`, `active_spec_doc_revision_id`, `active_implementation_plan_doc_revision_id`, or `execution_package_id`.
 - Every recover/scavenge execute request must include a `candidate_predicate` captured from the health projection.
-- For single-session recover/mark-unrecoverable, the request `operation_idempotency_key` must exactly equal `candidate_predicate.operation_idempotency_key`. The predicate is the source of the operation identity; a mismatched top-level key fails closed.
+- For single-session `/session-operations/:sessionId/recover` recover/mark-unrecoverable requests, the request `operation_idempotency_key` must exactly equal `candidate_predicate.operation_idempotency_key`. The predicate is the source of the single-session operation identity; a mismatched top-level key fails closed.
+- For `/session-operations/scavenge` execute requests, the stored recovery record `operation_idempotency_key` is derived as `${operation_idempotency_key_prefix}:${codex_session_id}:${candidate_predicate.projection_digest}`. The candidate predicate's own `operation_idempotency_key` remains part of the fencing material and must be preserved, but scavenge must not compare the derived record key against `candidate_predicate.operation_idempotency_key`.
 - Predicate fields must use `ObservedRef<T>`; missing optional fields must not mean "unchecked."
 - Actor identity and scope must come from signed/authenticated request context via `actorContextFromHeaders` or an equivalent server-side context. Request bodies must not carry trusted actor identity.
 - Same `operation_idempotency_key` plus identical predicate/reason/operation/session returns the original `SessionRecoveryRecord`.
@@ -269,14 +282,117 @@ describe('session operations contracts', () => {
           expires_at: '2026-06-09T00:02:00.000Z',
           updated_at: '2026-06-09T00:01:00.000Z',
         },
-        pending_queued_action: { checked: true, state: 'absent' },
+        pending_queued_action: {
+          checked: true,
+          state: 'present',
+          id: 'action-1',
+          kind: 'execute_plan_item',
+          status: 'leased',
+          idempotency_key: 'action-key-1',
+          codex_session_turn_id: 'turn-1',
+          expected_input_capsule_digest: `sha256:${'c'.repeat(64)}`,
+          updated_at: '2026-06-09T00:01:10.000Z',
+        },
+        latest_turn: {
+          checked: true,
+          state: 'present',
+          id: 'turn-1',
+          status: 'running',
+          lease_id: 'lease-1',
+          lease_epoch: 3,
+          runtime_job_id: 'runtime-job-1',
+          expected_input_capsule_digest: `sha256:${'c'.repeat(64)}`,
+          input_capsule_digest: `sha256:${'c'.repeat(64)}`,
+          output_capsule_digest: null,
+          updated_at: '2026-06-09T00:01:20.000Z',
+        },
+        runtime_job: {
+          checked: true,
+          state: 'present',
+          id: 'runtime-job-1',
+          status: 'running',
+          terminal_status: null,
+          worker_id: 'worker-1',
+          launch_lease_id: 'lease-1',
+          accepted_worker_session_digest: `sha256:${'b'.repeat(64)}`,
+          expires_at: '2026-06-09T00:04:00.000Z',
+          updated_at: '2026-06-09T00:01:30.000Z',
+        },
+        run_session: {
+          checked: true,
+          state: 'present',
+          id: 'run-session-1',
+          status: 'running',
+          codex_session_id: 'session-1',
+          codex_session_turn_id: 'turn-1',
+          remote_runtime_job_id: 'runtime-job-1',
+          remote_run_worker_lease_id: 'lease-1',
+          updated_at: '2026-06-09T00:01:40.000Z',
+        },
+        latest_capsule: {
+          checked: true,
+          state: 'present',
+          id: 'capsule-1',
+          digest: `sha256:${'c'.repeat(64)}`,
+          sequence: 12,
+          created_from_turn_id: 'turn-1',
+          created_at: '2026-06-09T00:01:50.000Z',
+        },
+        observed_at: '2026-06-09T00:03:00.000Z',
+      }),
+    ).not.toThrow();
+  });
+
+  it('rejects present predicate refs that omit required fencing fields', () => {
+    expect(() =>
+      sessionRecoveryCandidatePredicateSchema.parse({
+        codex_session_id: 'session-1',
+        workflow_id: 'workflow-1',
+        expected_health_state: 'blocked_orphaned_action',
+        operation_idempotency_key: 'recover-session-1-orphan-action',
+        projection_digest: `sha256:${'a'.repeat(64)}`,
+        workflow: {
+          id: 'workflow-1',
+          status: 'execution_running',
+          updated_at: '2026-06-09T00:00:00.000Z',
+          active_codex_session_id: 'session-1',
+          active_boundary_summary_revision_id: null,
+          active_spec_doc_revision_id: null,
+          active_implementation_plan_doc_revision_id: null,
+          execution_package_id: null,
+        },
+        session: {
+          id: 'session-1',
+          status: 'active',
+          role: 'active',
+          updated_at: '2026-06-09T00:00:00.000Z',
+          active_lease_id: null,
+          lease_epoch: 3,
+          runner_worker_id: null,
+          runner_launch_lease_id: null,
+          runner_runtime_job_id: null,
+          runner_expires_at: null,
+          latest_turn_id: null,
+          latest_capsule_id: null,
+          latest_capsule_digest: null,
+        },
+        active_lease: { checked: true, state: 'absent' },
+        pending_queued_action: {
+          checked: true,
+          state: 'present',
+          id: 'action-1',
+          kind: 'execute_plan_item',
+          status: 'leased',
+          idempotency_key: 'action-key-1',
+          updated_at: '2026-06-09T00:01:10.000Z',
+        },
         latest_turn: { checked: true, state: 'absent' },
         runtime_job: { checked: true, state: 'absent' },
         run_session: { checked: true, state: 'absent' },
         latest_capsule: { checked: true, state: 'absent' },
         observed_at: '2026-06-09T00:03:00.000Z',
       }),
-    ).not.toThrow();
+    ).toThrow(/codex_session_turn_id|expected_input_capsule_digest/);
   });
 
   it('requires reason and idempotency prefix for scavenge execute requests', () => {
@@ -320,13 +436,21 @@ describe('session operations contracts', () => {
       sessionOperationsHealthQuerySchema.parse({
         state: 'blocked_stale_lease',
         severity: 'blocked',
+        project_id: 'project-1',
         development_plan_item_id: 'item-1',
+        worker_id: 'worker-1',
+        min_lease_age_seconds: '300',
+        max_lease_age_seconds: '900',
         limit: '50',
       }),
     ).toEqual({
       state: 'blocked_stale_lease',
       severity: 'blocked',
+      project_id: 'project-1',
       development_plan_item_id: 'item-1',
+      worker_id: 'worker-1',
+      min_lease_age_seconds: 300,
+      max_lease_age_seconds: 900,
       limit: 50,
     });
   });
@@ -373,26 +497,148 @@ export const observedPresentSchema = <T extends z.ZodRawShape>(shape: T) =>
 
 export const observedRefSchema = <T extends z.ZodRawShape>(shape: T) =>
   z.discriminatedUnion('state', [observedAbsentSchema, observedPresentSchema(shape)]);
-```
 
-Continue in the same file with schemas for:
+export const capsuleRetentionPinSchema = z.object({
+  capsule_id: z.string(),
+  capsule_digest: z.string(),
+  pin_state: z.enum(['pinned', 'not_cleanable', 'unpinned_candidate', 'unknown']),
+  pin_reasons: z.array(z.string()).default([]),
+  referenced_by: z
+    .array(
+      z.object({
+        object_type: z.string(),
+        object_id: z.string(),
+        relation: z.string(),
+      }),
+    )
+    .default([]),
+  checked_at: z.string(),
+});
 
-- `capsuleRetentionPinSchema`
-- `sessionRecoveryCandidatePredicateSchema`
-- `operatorSessionHealthProjectionSchema`
-- `sessionOperationsHealthResponseSchema`
-- `planItemSessionDiagnosticsSchema`
-- `recoverSessionRequestSchema`
-- `recoverSessionResponseSchema`
-- `scavengeSessionOperationsRequestSchema`
-- `scavengeSessionOperationsResponseSchema`
-- `sessionRecoveryRecordDtoSchema`
-- `sessionOperationsAuditResponseSchema`
-- `sessionOperationsHealthQuerySchema`
+const predicateWorkflowSchema = z.object({
+  id: z.string(),
+  status: z.string(),
+  updated_at: z.string(),
+  active_codex_session_id: z.string().nullable(),
+  active_boundary_summary_revision_id: z.string().nullable(),
+  active_spec_doc_revision_id: z.string().nullable(),
+  active_implementation_plan_doc_revision_id: z.string().nullable(),
+  execution_package_id: z.string().nullable(),
+});
 
-Use three distinct DTO surfaces:
+const predicateSessionSchema = z.object({
+  id: z.string(),
+  status: z.string(),
+  role: z.string(),
+  updated_at: z.string(),
+  active_lease_id: z.string().nullable(),
+  lease_epoch: z.number().int(),
+  runner_worker_id: z.string().nullable(),
+  runner_launch_lease_id: z.string().nullable(),
+  runner_runtime_job_id: z.string().nullable(),
+  runner_expires_at: z.string().nullable(),
+  latest_turn_id: z.string().nullable(),
+  latest_capsule_id: z.string().nullable(),
+  latest_capsule_digest: z.string().nullable(),
+});
 
-```ts
+export const sessionRecoveryCandidatePredicateSchema = z.object({
+  codex_session_id: z.string(),
+  workflow_id: z.string(),
+  expected_health_state: planItemSessionHealthStateSchema,
+  operation_idempotency_key: z.string().min(1),
+  projection_digest: z.string(),
+  workflow: predicateWorkflowSchema,
+  session: predicateSessionSchema,
+  active_lease: observedRefSchema({
+    id: z.string(),
+    status: z.string(),
+    lease_epoch: z.number().int(),
+    worker_id: z.string(),
+    worker_session_digest: z.string(),
+    heartbeat_at: z.string().nullable(),
+    expires_at: z.string(),
+    updated_at: z.string(),
+  }),
+  pending_queued_action: observedRefSchema({
+    id: z.string(),
+    kind: z.string(),
+    status: z.string(),
+    idempotency_key: z.string(),
+    codex_session_turn_id: z.string().nullable(),
+    expected_input_capsule_digest: z.string().nullable(),
+    updated_at: z.string(),
+  }),
+  latest_turn: observedRefSchema({
+    id: z.string(),
+    status: z.string(),
+    lease_id: z.string().nullable(),
+    lease_epoch: z.number().int().nullable(),
+    runtime_job_id: z.string().nullable(),
+    expected_input_capsule_digest: z.string().nullable(),
+    input_capsule_digest: z.string().nullable(),
+    output_capsule_digest: z.string().nullable(),
+    updated_at: z.string(),
+  }),
+  runtime_job: observedRefSchema({
+    id: z.string(),
+    status: z.string(),
+    terminal_status: z.string().nullable(),
+    worker_id: z.string(),
+    launch_lease_id: z.string(),
+    accepted_worker_session_digest: z.string().nullable(),
+    expires_at: z.string(),
+    updated_at: z.string(),
+  }),
+  run_session: observedRefSchema({
+    id: z.string(),
+    status: z.string(),
+    codex_session_id: z.string().nullable(),
+    codex_session_turn_id: z.string().nullable(),
+    remote_runtime_job_id: z.string().nullable(),
+    remote_run_worker_lease_id: z.string().nullable(),
+    updated_at: z.string(),
+  }),
+  latest_capsule: observedRefSchema({
+    id: z.string(),
+    digest: z.string(),
+    sequence: z.number().int(),
+    created_from_turn_id: z.string(),
+    created_at: z.string(),
+  }),
+  observed_at: z.string(),
+});
+
+export const operatorSessionHealthProjectionSchema = z.object({
+  codex_session_id: z.string(),
+  workflow_id: z.string(),
+  project_id: z.string(),
+  organization_id: z.string().optional(),
+  development_plan_item_id: z.string(),
+  state: planItemSessionHealthStateSchema,
+  severity: planItemSessionHealthSeveritySchema,
+  reason_code: z.string().optional(),
+  summary: z.string(),
+  projection_digest: z.string().optional(),
+  checked_at: z.string(),
+  recovery_available: z.boolean(),
+  recovery_operation_labels: z.array(z.enum(['recover', 'mark_unrecoverable'])).default([]),
+  operator_intervention_required: z.boolean(),
+  normal_workflow_actions_available: z.boolean().default(true),
+  retention_risk: z.boolean().default(false),
+  lineage_risk: z.boolean().default(false),
+  latest_checkpoint: z
+    .object({
+      object_type: z.string(),
+      object_id: z.string(),
+      digest_prefix: z.string().optional(),
+      pin_source: z.string().optional(),
+    })
+    .optional(),
+  retention_pins: z.array(capsuleRetentionPinSchema).default([]),
+  candidate_predicate: sessionRecoveryCandidatePredicateSchema.optional(),
+});
+
 export const planItemSessionDiagnosticsSchema = z.object({
   plan_item_id: z.string(),
   workflow_resolution: z.enum(['active_workflow', 'no_active_workflow', 'ambiguous_workflows']),
@@ -458,14 +704,21 @@ export const sessionOperationsAuditResponseSchema = z.object({
   items: z.array(sessionRecoveryRecordDtoSchema),
 });
 
-export const sessionOperationsHealthQuerySchema = z.object({
+export const sessionOperationsFilterSchema = z.object({
   state: planItemSessionHealthStateSchema.optional(),
   severity: planItemSessionHealthSeveritySchema.optional(),
+  project_id: z.string().optional(),
   development_plan_item_id: z.string().optional(),
   workflow_id: z.string().optional(),
   codex_session_id: z.string().optional(),
+  worker_id: z.string().optional(),
+  min_lease_age_seconds: z.coerce.number().int().nonnegative().optional(),
+  max_lease_age_seconds: z.coerce.number().int().nonnegative().optional(),
+  recovered_state: z.enum(['any', 'exclude_terminal', 'only_recovered', 'only_unrecoverable']).optional(),
   limit: z.coerce.number().int().positive().max(250).optional(),
 });
+
+export const sessionOperationsHealthQuerySchema = sessionOperationsFilterSchema;
 
 export const recoverSessionResponseSchema = z.object({
   record: sessionRecoveryRecordDtoSchema,
@@ -479,7 +732,7 @@ export const scavengeSessionOperationsRequestSchema = z.object({
   confirm_execute: z.boolean().optional(),
   reason: z.string().min(1).optional(),
   operation_idempotency_key_prefix: z.string().min(1).optional(),
-  filters: z.record(z.string(), z.unknown()).optional(),
+  filters: sessionOperationsFilterSchema.optional(),
   candidates: z
     .array(z.object({ codex_session_id: z.string(), candidate_predicate: sessionRecoveryCandidatePredicateSchema }))
     .optional(),
@@ -532,6 +785,7 @@ export type PlanItemSessionHealthSeverity = z.infer<typeof planItemSessionHealth
 export type CapsuleRetentionPin = z.infer<typeof capsuleRetentionPinSchema>;
 export type SessionRecoveryCandidatePredicate = z.infer<typeof sessionRecoveryCandidatePredicateSchema>;
 export type OperatorSessionHealthProjection = z.infer<typeof operatorSessionHealthProjectionSchema>;
+export type SessionOperationsFilter = z.infer<typeof sessionOperationsFilterSchema>;
 export type SessionOperationsHealthQuery = z.infer<typeof sessionOperationsHealthQuerySchema>;
 export type SessionOperationsHealthResponse = z.infer<typeof sessionOperationsHealthResponseSchema>;
 export type SessionOperationsAuditResponse = z.infer<typeof sessionOperationsAuditResponseSchema>;
@@ -587,6 +841,7 @@ import {
 const baseInput = {
   workflow: {
     id: 'workflow-1',
+    project_id: 'project-1',
     development_plan_id: 'plan-1',
     development_plan_item_id: 'item-1',
     status: 'execution_running',
@@ -762,7 +1017,9 @@ Create `packages/domain/src/session-operations.ts` with:
 ```ts
 import { createHash } from 'node:crypto';
 import type {
+  CapsuleRetentionPin,
   PlanItemSessionHealthState,
+  SessionOperationsFilter,
   SessionRecoveryCandidatePredicate,
 } from '@forgeloop/contracts';
 import { codexCanonicalDigest } from './codex-runtime.js';
@@ -773,6 +1030,8 @@ export const sessionRecoveryProjectionDigest = (value: unknown): string => codex
 export interface BuildSessionHealthProjectionInput {
   workflow: {
     id: string;
+    project_id: string;
+    organization_id?: string;
     development_plan_id: string;
     development_plan_item_id: string;
     status: string;
@@ -807,6 +1066,73 @@ export interface BuildSessionHealthProjectionInput {
   retention_pins: CapsuleRetentionPin[];
   stale_projection_reason?: 'capsule_sync_lag' | 'missing_optional_diagnostic_metadata' | 'stale_projection_timestamp';
   checked_at: IsoDateTime;
+}
+
+export interface PlanItemSessionHealth {
+  id: string;
+  project_id: string;
+  organization_id?: string;
+  workflow_id: string;
+  development_plan_item_id: string;
+  codex_session_id: string;
+  state: PlanItemSessionHealthState;
+  severity: 'none' | 'info' | 'warning' | 'blocked' | 'critical';
+  reason_code?: string;
+  summary: string;
+  projection_digest: string;
+  candidate_predicate?: SessionRecoveryCandidatePredicate;
+  safe_projection_json: Record<string, unknown>;
+  checked_at: IsoDateTime;
+  updated_at: IsoDateTime;
+}
+
+export type ListPlanItemSessionHealthQuery = Partial<SessionOperationsFilter>;
+
+export interface ListSessionOperationsDiscoveryQuery extends SessionOperationsFilter {
+  now: IsoDateTime;
+  organization_id?: string;
+}
+
+export interface SessionRecoveryRecord {
+  id: string;
+  operation_idempotency_key: string;
+  codex_session_id: string;
+  workflow_id: string;
+  development_plan_item_id: string;
+  operation: 'recover' | 'scavenge' | 'mark_unrecoverable';
+  actor_id: string;
+  reason: string;
+  before_state: PlanItemSessionHealthState;
+  after_state: PlanItemSessionHealthState;
+  before_projection_digest: string;
+  after_projection_digest: string;
+  candidate_predicate: SessionRecoveryCandidatePredicate;
+  predicate_digest: string;
+  affected_lease_ids: string[];
+  affected_queued_action_ids: string[];
+  affected_turn_ids: string[];
+  affected_runtime_job_ids: string[];
+  affected_run_session_ids: string[];
+  affected_capsule_ids: string[];
+  result: 'applied' | 'skipped' | 'blocked';
+  result_code: string;
+  object_event_id?: string;
+  created_at: IsoDateTime;
+}
+
+export interface ListSessionRecoveryRecordsQuery {
+  codex_session_id?: string;
+  workflow_id?: string;
+  operation_idempotency_key?: string;
+  limit?: number;
+}
+
+export type CapsuleRetentionPinRecord = CapsuleRetentionPin;
+
+export interface ListCapsuleRetentionPinsQuery {
+  capsule_id?: string;
+  codex_session_id?: string;
+  workflow_id?: string;
 }
 ```
 
@@ -922,6 +1248,100 @@ import {
   type DeliveryRepository,
 } from '../../packages/db/src/index';
 
+const sessionHealthFixture = (overrides: Record<string, unknown> = {}) => ({
+  id: '88888831-1111-4111-8111-111111111001',
+  project_id: '88888831-1111-4111-8111-111111111000',
+  workflow_id: '88888831-1111-4111-8111-111111111002',
+  development_plan_item_id: '88888831-1111-4111-8111-111111111003',
+  codex_session_id: '88888831-1111-4111-8111-111111111004',
+  state: 'healthy',
+  severity: 'none',
+  summary: 'Session is healthy.',
+  projection_digest: `sha256:${'a'.repeat(64)}`,
+  safe_projection_json: {},
+  checked_at: '2026-06-09T00:00:00.000Z',
+  updated_at: '2026-06-09T00:00:00.000Z',
+  ...overrides,
+});
+
+const recoveryPredicateFixture = () => ({
+  codex_session_id: '88888831-1111-4111-8111-111111111004',
+  workflow_id: '88888831-1111-4111-8111-111111111002',
+  expected_health_state: 'blocked_stale_lease',
+  operation_idempotency_key: 'recover-stale-lease-1',
+  projection_digest: `sha256:${'b'.repeat(64)}`,
+  workflow: {
+    id: '88888831-1111-4111-8111-111111111002',
+    status: 'execution_running',
+    updated_at: '2026-06-09T00:00:00.000Z',
+    active_codex_session_id: '88888831-1111-4111-8111-111111111004',
+    active_boundary_summary_revision_id: null,
+    active_spec_doc_revision_id: null,
+    active_implementation_plan_doc_revision_id: null,
+    execution_package_id: null,
+  },
+  session: {
+    id: '88888831-1111-4111-8111-111111111004',
+    status: 'active',
+    role: 'active',
+    updated_at: '2026-06-09T00:00:00.000Z',
+    active_lease_id: '88888831-1111-4111-8111-111111111201',
+    lease_epoch: 2,
+    runner_worker_id: null,
+    runner_launch_lease_id: null,
+    runner_runtime_job_id: null,
+    runner_expires_at: null,
+    latest_turn_id: null,
+    latest_capsule_id: null,
+    latest_capsule_digest: null,
+  },
+  active_lease: {
+    checked: true,
+    state: 'present',
+    id: '88888831-1111-4111-8111-111111111201',
+    status: 'active',
+    lease_epoch: 2,
+    worker_id: 'worker-1',
+    worker_session_digest: `sha256:${'b'.repeat(64)}`,
+    heartbeat_at: '2026-06-09T00:01:00.000Z',
+    expires_at: '2026-06-09T00:02:00.000Z',
+    updated_at: '2026-06-09T00:01:00.000Z',
+  },
+  pending_queued_action: { checked: true, state: 'absent' },
+  latest_turn: { checked: true, state: 'absent' },
+  runtime_job: { checked: true, state: 'absent' },
+  run_session: { checked: true, state: 'absent' },
+  latest_capsule: { checked: true, state: 'absent' },
+  observed_at: '2026-06-09T00:03:00.000Z',
+});
+
+const recoveryRecordFixture = (overrides: Record<string, unknown> = {}) => ({
+  id: '88888831-1111-4111-8111-111111111101',
+  operation_idempotency_key: 'recover-stale-lease-1',
+  operation: 'recover',
+  actor_id: '88888831-1111-4111-8111-111111111102',
+  codex_session_id: '88888831-1111-4111-8111-111111111004',
+  workflow_id: '88888831-1111-4111-8111-111111111002',
+  development_plan_item_id: '88888831-1111-4111-8111-111111111003',
+  reason: 'Release stale lease.',
+  before_state: 'blocked_stale_lease',
+  after_state: 'recovered',
+  before_projection_digest: `sha256:${'b'.repeat(64)}`,
+  after_projection_digest: `sha256:${'c'.repeat(64)}`,
+  candidate_predicate: recoveryPredicateFixture(),
+  predicate_digest: `sha256:${'d'.repeat(64)}`,
+  affected_lease_ids: ['88888831-1111-4111-8111-111111111201'],
+  affected_queued_action_ids: [],
+  affected_turn_ids: [],
+  affected_runtime_job_ids: [],
+  affected_run_session_ids: [],
+  affected_capsule_ids: [],
+  result: 'applied',
+  result_code: 'recovered',
+  created_at: '2026-06-09T00:00:00.000Z',
+  ...overrides,
+});
+
 function runSessionOperationsRepositoryExamples(name: string, createRepository: () => DeliveryRepository): void {
   describe(name, () => {
     it('upserts one health projection per workflow/session', async () => {
@@ -954,6 +1374,10 @@ function runSessionOperationsRepositoryExamples(name: string, createRepository: 
           reason: 'Different reason.',
         }),
       ).rejects.toThrow(/idempotency/i);
+
+      const stored = await repository.getSessionRecoveryRecordByOperationIdempotencyKey(record.operation_idempotency_key);
+      expect(stored?.id).toBe(record.id);
+      expect(stored?.candidate_predicate.projection_digest).toBe(record.candidate_predicate.projection_digest);
     });
 
     it('stores per-capsule retention pins', async () => {
@@ -972,13 +1396,50 @@ function runSessionOperationsRepositoryExamples(name: string, createRepository: 
       const pins = await repository.listCapsuleRetentionPins({ capsule_id: 'capsule-1' });
       expect(pins[0]?.pin_reasons).toContain('active_session_latest');
     });
+
+    it('discovers active workflow-owned sessions even before health rows exist', async () => {
+      const repository = createRepository();
+      const workflowId = '88888831-1111-4111-8111-111111111301';
+      const sessionId = '88888831-1111-4111-8111-111111111302';
+      const itemId = '88888831-1111-4111-8111-111111111303';
+      await repository.createPlanItemWorkflowWithInitialSession({
+        id: workflowId,
+        codex_session_id: sessionId,
+        development_plan_id: '88888831-1111-4111-8111-111111111304',
+        development_plan_item_id: itemId,
+        runtime_profile_id: '88888831-1111-4111-8111-111111111305',
+        runtime_profile_revision_id: '88888831-1111-4111-8111-111111111306',
+        credential_binding_id: '88888831-1111-4111-8111-111111111307',
+        credential_binding_version_id: '88888831-1111-4111-8111-111111111308',
+        actor_id: '88888831-1111-4111-8111-111111111309',
+        now: '2026-06-09T00:00:00.000Z',
+      });
+      await repository.claimCodexSessionLease({
+        session_id: sessionId,
+        workflow_id: workflowId,
+        lease_id: '88888831-1111-4111-8111-111111111310',
+        worker_id: 'worker-1',
+        worker_session_digest: `sha256:${'b'.repeat(64)}`,
+        lease_token_hash: `sha256:${'1'.repeat(64)}`,
+        now: '2026-06-09T00:00:00.000Z',
+        expires_at: '2026-06-09T00:01:00.000Z',
+      });
+
+      expect(await repository.listPlanItemSessionHealth({ workflow_id: workflowId })).toEqual([]);
+      await expect(
+        repository.listActivePlanItemWorkflowSessionsForSessionOperations({
+          development_plan_item_id: itemId,
+          worker_id: 'worker-1',
+          min_lease_age_seconds: 300,
+          now: '2026-06-09T00:06:00.000Z',
+        }),
+      ).resolves.toEqual([{ workflow_id: workflowId, development_plan_item_id: itemId, codex_session_id: sessionId }]);
+    });
   });
 }
 
 runSessionOperationsRepositoryExamples('Session operations repository in-memory adapter', () => new InMemoryDeliveryRepository());
 ```
-
-Use local fixture helpers in the same test file. Keep IDs UUID-shaped if the repository contract expects Postgres UUIDs.
 
 - [ ] **Step 2: Run repository test to verify it fails**
 
@@ -995,6 +1456,8 @@ export const plan_item_session_health = pgTable(
   'plan_item_session_health',
   {
     id: uuid('id').primaryKey().defaultRandom(),
+    projectId: uuid('project_id').notNull().references(() => projects.id),
+    organizationId: uuid('organization_id'),
     workflowId: uuid('workflow_id').notNull().references(() => plan_item_workflows.id),
     developmentPlanItemId: uuid('development_plan_item_id').notNull().references(() => development_plan_items.id),
     codexSessionId: uuid('codex_session_id').notNull().references(() => codex_sessions.id),
@@ -1010,6 +1473,7 @@ export const plan_item_session_health = pgTable(
   },
   (table) => [
     uniqueIndex('plan_item_session_health_workflow_session_idx').on(table.workflowId, table.codexSessionId),
+    index('plan_item_session_health_project_idx').on(table.projectId, table.state, table.severity),
     index('plan_item_session_health_state_idx').on(table.state, table.severity),
     index('plan_item_session_health_item_idx').on(table.developmentPlanItemId),
   ],
@@ -1050,7 +1514,7 @@ Expected migration content:
 - creates `session_recovery_records`;
 - creates `capsule_retention_pins`;
 - creates the unique idempotency index on `session_recovery_records.operation_idempotency_key`;
-- creates the health lookup/indexes used by dashboard filters;
+- creates the health lookup/indexes used by dashboard filters, including project/state/severity lookup for persisted terminal rows;
 - creates the retention pin uniqueness constraint by capsule/reference relation;
 - does not drop or rewrite existing Wave 2-7 workflow/session/runtime tables.
 
@@ -1064,9 +1528,15 @@ Modify `packages/db/src/repositories/delivery-repository.ts` with domain-facing 
 upsertPlanItemSessionHealth(health: PlanItemSessionHealth): Promise<PlanItemSessionHealth>;
 getPlanItemSessionHealth(input: { workflow_id: string; codex_session_id: string }): Promise<PlanItemSessionHealth | undefined>;
 listPlanItemSessionHealth(query: ListPlanItemSessionHealthQuery): Promise<PlanItemSessionHealth[]>;
+listActivePlanItemWorkflowsByItem(itemId: string): Promise<PlanItemWorkflow[]>;
+listActivePlanItemWorkflowSessionsForSessionOperations(
+  // `now` is server-supplied by SessionOperationsService and is used for lease-age filters.
+  query: ListSessionOperationsDiscoveryQuery,
+): Promise<Array<{ workflow_id: string; development_plan_item_id: string; codex_session_id: string }>>;
 createOrReplaySessionRecoveryRecord(
   record: SessionRecoveryRecord,
 ): Promise<{ record: SessionRecoveryRecord; replayed: boolean }>;
+getSessionRecoveryRecordByOperationIdempotencyKey(operationIdempotencyKey: string): Promise<SessionRecoveryRecord | undefined>;
 listSessionRecoveryRecords(query: ListSessionRecoveryRecordsQuery): Promise<SessionRecoveryRecord[]>;
 upsertCapsuleRetentionPins(pins: readonly CapsuleRetentionPinRecord[]): Promise<void>;
 listCapsuleRetentionPins(query: ListCapsuleRetentionPinsQuery): Promise<CapsuleRetentionPinRecord[]>;
@@ -1077,7 +1547,11 @@ listCapsuleRetentionPins(query: ListCapsuleRetentionPinsQuery): Promise<CapsuleR
 Modify `packages/db/src/repositories/in-memory-delivery-repository.ts`:
 
 - Store health rows by `${workflow_id}:${codex_session_id}`.
+- Implement `listActivePlanItemWorkflowsByItem(itemId)` by returning every workflow for the item whose status is not archived/abandoned/terminal according to the existing Plan Item Workflow status model.
+- Implement `listActivePlanItemWorkflowSessionsForSessionOperations(query)` by scanning active/non-terminal Plan Item Workflows that have an active `codex_session_id` and belong to the authenticated operator scope. Apply `project_id`, `development_plan_item_id`, `workflow_id`, `codex_session_id`, `worker_id`, `min_lease_age_seconds`, and `max_lease_age_seconds` filters against workflow/session/active-lease fields before returning candidate session ids. Use the server-supplied `query.now` for lease-age calculations. Do not read from `plan_item_session_health` in this method; it is the source-of-truth discovery path used to rebuild missing health rows.
+- Add an explicitly named in-memory-only test helper method `insertPlanItemWorkflowForSessionOperationsTestOnly(input)` that inserts a workflow/session pair without the one-active-workflow guard. Use it only from `tests/helpers/session-operations-fixtures.ts` to simulate corrupted ambiguity. Do not add it to `DeliveryRepository`; do not implement it in Drizzle.
 - Store recovery records by `id` and by `operation_idempotency_key`.
+- Implement `getSessionRecoveryRecordByOperationIdempotencyKey(operationIdempotencyKey)` as a direct lookup used only inside a `withObjectLock` idempotency precheck before recovery/scavenge mutation.
 - On `createOrReplaySessionRecoveryRecord`, compare the existing record's operation/session/reason/predicate digest/result target fields.
 - Throw `DomainError('session_operations_idempotency_conflict', ...)` for conflicts.
 - Store retention pins by capsule and reference relation.
@@ -1088,12 +1562,15 @@ Modify `packages/db/src/repositories/in-memory-delivery-repository.ts`:
 Modify `packages/db/src/repositories/drizzle-delivery-repository.ts`:
 
 - Add row mappers for the three tables.
+- Implement `listActivePlanItemWorkflowsByItem(itemId)` with a deterministic `updated_at DESC, id ASC` ordering so ambiguous diagnostics are stable.
+- Implement `listActivePlanItemWorkflowSessionsForSessionOperations(query)` as a deterministic join from active/non-terminal Plan Item Workflows to their active Codex sessions and active lease/runtime ownership fields. Use `query.now` for `min_lease_age_seconds` and `max_lease_age_seconds`. It must not depend on existing `plan_item_session_health` rows. Order by `project_id ASC, development_plan_item_id ASC, updated_at DESC, workflow_id ASC, codex_session_id ASC` so dashboard/scavenge dry-runs are stable.
 - Implement `upsertPlanItemSessionHealth` with `onConflictDoUpdate`.
 - Implement `createOrReplaySessionRecoveryRecord` transactionally:
   - query by idempotency key first;
   - return replay when identical;
   - throw on conflict;
   - insert otherwise.
+- Implement `getSessionRecoveryRecordByOperationIdempotencyKey(operationIdempotencyKey)` with the same row mapper as `listSessionRecoveryRecords`.
 - Implement retention pin upsert with unique relation key.
 - Ensure `upsertPlanItemSessionHealth` and `upsertCapsuleRetentionPins` can run in the same service flow after projection rebuild so the dashboard reads a consistent health/pin snapshot.
 
@@ -1137,9 +1614,37 @@ Create `tests/api/session-operations.test.ts`:
 ```ts
 import request from 'supertest';
 import { describe, expect, it } from 'vitest';
+import { Test } from '@nestjs/testing';
+import type { INestApplication } from '@nestjs/common';
+import { AppModule } from '../../apps/control-plane-api/src/app.module';
 import { actorHeaderName, actorClassHeaderName } from '../../apps/control-plane-api/src/modules/auth/actor-context';
-import { createTestApp } from './test-app';
+import { DELIVERY_REPOSITORY } from '../../apps/control-plane-api/src/modules/core/control-plane-tokens';
+import { DELIVERY_RUN_WORKER } from '../../apps/control-plane-api/src/modules/run-control/run-worker.token';
+import { InMemoryDeliveryRepository } from '../../packages/db/src';
 import { seedDevelopmentPlanItem, startWorkflow } from '../helpers/plan-item-workflow-fixtures';
+import {
+  seedAmbiguousWorkflowForPlanItem,
+  seedBlockedMissingCapsuleCandidate,
+  seedBlockedMissingCapsuleCandidateInApp,
+  seedBlockedOrphanQueuedActionCandidate,
+  seedBlockedOrphanRuntimeRunSessionCandidate,
+  seedBlockedStaleLeaseCandidate,
+  seedBlockedStaleLeaseCandidateInApp,
+  seedBlockedStaleLeaseStateOnly,
+} from '../helpers/session-operations-fixtures';
+
+const createTestApp = async (): Promise<{ app: INestApplication; repository: InMemoryDeliveryRepository }> => {
+  const repository = new InMemoryDeliveryRepository();
+  const moduleRef = await Test.createTestingModule({ imports: [AppModule] })
+    .overrideProvider(DELIVERY_REPOSITORY)
+    .useValue(repository)
+    .overrideProvider(DELIVERY_RUN_WORKER)
+    .useValue({ kick: () => undefined, drainOnce: async () => undefined })
+    .compile();
+  const app = moduleRef.createNestApplication();
+  await app.init();
+  return { app, repository };
+};
 
 const signedHumanHeaders = (actorId: string) => ({
   [actorHeaderName]: actorId,
@@ -1153,7 +1658,7 @@ const signedDeveloperHeaders = (actorId: string) => ({
 
 describe('session operations API', () => {
   it('returns public Plan Item diagnostics without raw recovery predicate', async () => {
-    const app = await createTestApp();
+    const { app } = await createTestApp();
     const seeded = await seedDevelopmentPlanItem(app, { idPrefix: '88888881' });
     await startWorkflow(app, seeded.plan.id, seeded.item.id);
 
@@ -1169,10 +1674,10 @@ describe('session operations API', () => {
   });
 
   it('fails closed when Plan Item workflow resolution is ambiguous', async () => {
-    const app = await createTestApp();
+    const { app } = await createTestApp();
     const seeded = await seedDevelopmentPlanItem(app, { idPrefix: '88888882' });
     await startWorkflow(app, seeded.plan.id, seeded.item.id);
-    // Insert a second non-archived workflow directly through repository to simulate corrupted state.
+    await seedAmbiguousWorkflowForPlanItem(app, seeded);
 
     await request(app.getHttpServer())
       .get(`/plan-items/${seeded.item.id}/session-diagnostics`)
@@ -1181,10 +1686,11 @@ describe('session operations API', () => {
   });
 
   it('lists operator health projections with safe candidate metadata', async () => {
-    const { app, sessionId, actorId } = await seedBlockedStaleLeaseCandidate('88888896');
+    const { app, sessionId, itemId, actorId, developerActorId, repository } = await seedBlockedStaleLeaseStateOnly('88888896');
 
+    expect(await repository.listPlanItemSessionHealth({ codex_session_id: sessionId })).toEqual([]);
     const response = await request(app.getHttpServer())
-      .get('/session-operations/health?state=blocked_stale_lease')
+      .get(`/session-operations/health?state=blocked_stale_lease&development_plan_item_id=${itemId}&worker_id=${developerActorId}&min_lease_age_seconds=120`)
       .set(signedHumanHeaders(actorId))
       .expect(200);
 
@@ -1192,6 +1698,29 @@ describe('session operations API', () => {
     expect(response.body.items[0].candidate_predicate).toBeDefined();
     expect(JSON.stringify(response.body)).not.toContain('codex_thread_id');
     expect(JSON.stringify(response.body)).not.toContain('lease_token');
+  });
+
+  it('scavenge dry-run discovers candidates from active workflow sessions without mutating rows', async () => {
+    const { app, sessionId, itemId, actorId, repository } = await seedBlockedStaleLeaseStateOnly('88888895');
+
+    const beforeHealth = await repository.listPlanItemSessionHealth({ codex_session_id: sessionId });
+    const response = await request(app.getHttpServer())
+      .post('/session-operations/scavenge')
+      .set(signedHumanHeaders(actorId))
+      .send({
+        mode: 'dry_run',
+        filters: {
+          state: 'blocked_stale_lease',
+          development_plan_item_id: itemId,
+          min_lease_age_seconds: 120,
+        },
+      })
+      .expect(201);
+
+    expect(response.body.candidates.some((item) => item.codex_session_id === sessionId)).toBe(true);
+    expect(response.body.candidates[0].candidate_predicate).toBeDefined();
+    expect(await repository.listPlanItemSessionHealth({ codex_session_id: sessionId })).toEqual(beforeHealth);
+    expect(await repository.listSessionRecoveryRecords({ codex_session_id: sessionId })).toEqual([]);
   });
 
   it('lists safe recovery audit records for an operator-scoped session', async () => {
@@ -1229,11 +1758,43 @@ Use `seedDevelopmentPlanItem`, `startWorkflow`, and `idsFor` from `tests/helpers
 Required helpers:
 
 ```ts
-export async function seedBlockedStaleLeaseCandidate(idPrefix: string) {
-  return seedBlockedStaleLeaseCandidateInApp(await createTestApp(), idPrefix);
+import type { INestApplication } from '@nestjs/common';
+import { Test } from '@nestjs/testing';
+import request from 'supertest';
+import { AppModule } from '../../apps/control-plane-api/src/app.module';
+import { DELIVERY_REPOSITORY } from '../../apps/control-plane-api/src/modules/core/control-plane-tokens';
+import { DELIVERY_RUN_WORKER } from '../../apps/control-plane-api/src/modules/run-control/run-worker.token';
+import { InMemoryDeliveryRepository, type DeliveryRepository } from '../../packages/db/src';
+import { idsFor, seedDevelopmentPlanItem, startWorkflow } from './plan-item-workflow-fixtures';
+
+export async function createSessionOperationsTestApp() {
+  const repository = new InMemoryDeliveryRepository();
+  const moduleRef = await Test.createTestingModule({ imports: [AppModule] })
+    .overrideProvider(DELIVERY_REPOSITORY)
+    .useValue(repository)
+    .overrideProvider(DELIVERY_RUN_WORKER)
+    .useValue({ kick: () => undefined, drainOnce: async () => undefined })
+    .compile();
+  const app = moduleRef.createNestApplication();
+  await app.init();
+  return { app, repository };
 }
 
-export async function seedBlockedStaleLeaseCandidateInApp(app: INestApplication, idPrefix: string) {
+export async function seedBlockedStaleLeaseCandidate(idPrefix: string) {
+  const stateOnly = await seedBlockedStaleLeaseStateOnly(idPrefix);
+  const health = await buildFreshOperatorHealthCandidate(stateOnly.app, stateOnly.sessionId, stateOnly.actorId);
+  return {
+    ...stateOnly,
+    predicate: health.candidate_predicate!,
+  };
+}
+
+export async function seedBlockedStaleLeaseStateOnly(idPrefix: string) {
+  const { app } = await createSessionOperationsTestApp();
+  return seedBlockedStaleLeaseStateOnlyInApp(app, idPrefix);
+}
+
+export async function seedBlockedStaleLeaseStateOnlyInApp(app: INestApplication, idPrefix: string) {
   const seeded = await seedDevelopmentPlanItem(app, { idPrefix });
   const workflow = await startWorkflow(app, seeded.plan.id, seeded.item.id);
   const repository = app.get(DELIVERY_REPOSITORY) as DeliveryRepository;
@@ -1241,6 +1802,8 @@ export async function seedBlockedStaleLeaseCandidateInApp(app: INestApplication,
 
   await repository.claimCodexSessionLease({
     session_id: sessionId,
+    workflow_id: workflow.id,
+    lease_id: `${idPrefix}-1111-4111-8111-111111112001`,
     worker_id: seeded.ids.actorDelegate,
     worker_session_digest: `sha256:${'b'.repeat(64)}`,
     lease_token_hash: `sha256:${'1'.repeat(64)}`,
@@ -1248,7 +1811,6 @@ export async function seedBlockedStaleLeaseCandidateInApp(app: INestApplication,
     expires_at: '2026-06-09T00:01:00.000Z',
   });
 
-  const health = await buildFreshOperatorHealthCandidate(app, sessionId, seeded.ids.actorTech, '2026-06-09T00:05:00.000Z');
   return {
     app,
     repository,
@@ -1258,6 +1820,14 @@ export async function seedBlockedStaleLeaseCandidateInApp(app: INestApplication,
     actorId: seeded.ids.actorTech,
     developerActorId: seeded.ids.actorDelegate,
     outOfScopeOperatorActorId: seeded.ids.actorUnauthorized,
+  };
+}
+
+export async function seedBlockedStaleLeaseCandidateInApp(app: INestApplication, idPrefix: string) {
+  const stateOnly = await seedBlockedStaleLeaseStateOnlyInApp(app, idPrefix);
+  const health = await buildFreshOperatorHealthCandidate(app, stateOnly.sessionId, stateOnly.actorId);
+  return {
+    ...stateOnly,
     predicate: health.candidate_predicate!,
   };
 }
@@ -1279,9 +1849,13 @@ Also implement:
 - `seedBlockedMissingCapsuleCandidateInApp(app, idPrefix)`
   - same setup as `seedBlockedMissingCapsuleCandidate`, but reuses the supplied app/repository so one scavenge execute test can combine applied, skipped, and blocked candidates in the same control-plane instance.
 - `seedAmbiguousWorkflowForPlanItem(app, seeded)`
-  - directly create a second non-archived workflow/session for the same Plan Item through repository APIs.
-- `buildFreshOperatorHealthCandidate(app, sessionId, actorId, checkedAt?)`
-  - call `GET /session-operations/health` or the domain projection builder to get the same candidate predicate shape the API returns.
+  - require the repository to be an `InMemoryDeliveryRepository`;
+  - call `repository.insertPlanItemWorkflowForSessionOperationsTestOnly(...)` with a second workflow id and second Codex session id derived from `idsFor`;
+  - verify `repository.listActivePlanItemWorkflowsByItem(seeded.item.id)` returns two rows before returning;
+  - do not use `getActivePlanItemWorkflowByItem`, because that API intentionally hides ambiguity.
+- `buildFreshOperatorHealthCandidate(app, sessionId, actorId)`
+  - call `GET /session-operations/health?codex_session_id=${sessionId}` with signed operator headers and return the matching item from the response.
+  - This helper is allowed to persist health rows because it exercises the public dashboard path. Do not use it for first-run discovery/no-mutation assertions; use `seedBlockedStaleLeaseStateOnly` for those tests.
 
 Fixture IDs must be UUID-shaped and deterministic. If a needed worker/runtime id is not present in `idsFor`, add it to `tests/helpers/plan-item-workflow-fixtures.ts`.
 
@@ -1291,7 +1865,7 @@ Add to `tests/api/session-operations.test.ts`:
 
 ```ts
 it('returns no-active-workflow diagnostics when a Plan Item has not started a workflow', async () => {
-  const app = await createTestApp();
+  const { app } = await createTestApp();
   const seeded = await seedDevelopmentPlanItem(app, { idPrefix: '88888898' });
 
   const response = await request(app.getHttpServer())
@@ -1344,8 +1918,6 @@ it('rejects recover when request idempotency key differs from candidate predicat
 });
 ```
 
-In the ambiguous-workflow test above, replace the comment with `await seedAmbiguousWorkflowForPlanItem(app, seeded)`.
-
 - [ ] **Step 4: Write failing API tests for recover idempotency and control-only behavior**
 
 Add tests:
@@ -1385,6 +1957,37 @@ it('recovers a stale lease only when the candidate predicate still matches', asy
   expect(replay.body.record.id).toBe(response.body.record.id);
 });
 
+it('rejects same idempotency key with different reason before stale predicate checking', async () => {
+  const { app, sessionId, predicate, actorId, repository } = await seedBlockedStaleLeaseCandidate('88888902');
+
+  await request(app.getHttpServer())
+    .post(`/session-operations/${sessionId}/recover`)
+    .set(signedHumanHeaders(actorId))
+    .send({
+      operation_idempotency_key: predicate.operation_idempotency_key,
+      operation: 'recover',
+      reason: 'Release stale worker lease after heartbeat expiry.',
+      candidate_predicate: predicate,
+    })
+    .expect(201);
+
+  const response = await request(app.getHttpServer())
+    .post(`/session-operations/${sessionId}/recover`)
+    .set(signedHumanHeaders(actorId))
+    .send({
+      operation_idempotency_key: predicate.operation_idempotency_key,
+      operation: 'recover',
+      reason: 'Changed reason should be an idempotency conflict, not a stale candidate.',
+      candidate_predicate: predicate,
+    })
+    .expect(409);
+
+  expect(JSON.stringify(response.body)).toContain('session_operations_idempotency_conflict');
+  const records = await repository.listSessionRecoveryRecords({ codex_session_id: sessionId });
+  expect(records).toHaveLength(1);
+  expect(records[0]?.result).toBe('applied');
+});
+
 it('keeps recovered state durable until a separate human product action clears it', async () => {
   const { app, sessionId, itemId, predicate, actorId } = await seedBlockedStaleLeaseCandidate('88888901');
 
@@ -1417,6 +2020,8 @@ it('records a skipped recovery when a fresh lease supersedes the candidate', asy
   const { app, sessionId, predicate, actorId, repository } = await seedBlockedStaleLeaseCandidate('88888884');
   await repository.claimCodexSessionLease({
     session_id: sessionId,
+    workflow_id: predicate.workflow_id,
+    lease_id: '88888884-1111-4111-8111-111111112002',
     worker_id: 'fresh-worker-id',
     worker_session_digest: `sha256:${'f'.repeat(64)}`,
     lease_token_hash: `sha256:${'e'.repeat(64)}`,
@@ -1580,12 +2185,14 @@ it('requires explicit confirmation before scavenge execute mutates candidates', 
 });
 
 it('scavenge execute revalidates each candidate and reports applied skipped and blocked results', async () => {
-  const app = await createTestApp();
+  const { app } = await createTestApp();
   const applied = await seedBlockedStaleLeaseCandidateInApp(app, '88888893');
   const skipped = await seedBlockedStaleLeaseCandidateInApp(app, '88888894');
   const blocked = await seedBlockedMissingCapsuleCandidateInApp(app, '88888895');
   await skipped.repository.claimCodexSessionLease({
     session_id: skipped.sessionId,
+    workflow_id: skipped.workflowId,
+    lease_id: '88888894-1111-4111-8111-111111112002',
     worker_id: 'fresh-worker-id',
     worker_session_digest: `sha256:${'f'.repeat(64)}`,
     lease_token_hash: `sha256:${'e'.repeat(64)}`,
@@ -1700,7 +2307,12 @@ Create `apps/control-plane-api/src/modules/session-operations/session-operations
 - For Plan Item diagnostics, allow project participant/leader/developer checks based on existing Development Plan Item fields.
 - `listHealth(query, actorContext)`:
   - require Operator/Admin scope;
-  - load or rebuild projections for sessions matching filters;
+  - parse `query` through `sessionOperationsHealthQuerySchema`;
+  - build a `ListSessionOperationsDiscoveryQuery` from parsed filters plus authenticated operator scope and server `now`;
+  - call `repository.listActivePlanItemWorkflowSessionsForSessionOperations(discoveryQuery)` before reading persisted health rows so first-run dashboards can rebuild projections for active workflow-owned Codex sessions that do not yet have `plan_item_session_health` rows;
+  - for each discovered session, call `buildProjectionForSession(codex_session_id, { persist: true })`;
+  - include existing persisted terminal `recovered` / `unrecoverable` rows that match the requested filters even if the underlying active lease now looks healthy;
+  - apply state/severity/recovered-state filters to rebuilt projections after projection construction;
   - use `persist: true` for normal dashboard reads;
   - return `{ items, filters }` with operator-safe projections and candidate predicates only for authorized operators;
   - redact raw thread ids, lease tokens, local paths, secrets, and raw capsule contents.
@@ -1709,17 +2321,28 @@ Create `apps/control-plane-api/src/modules/session-operations/session-operations
   - list `SessionRecoveryRecord` rows for the session;
   - return `redactSessionRecoveryRecordDto(record)` items only;
   - never expose full `candidate_predicate`.
-- Load exactly one active workflow for a Plan Item:
+- Load active workflows for a Plan Item through `repository.listActivePlanItemWorkflowsByItem(planItemId)`:
   - no active workflow returns public `workflow_resolution: 'no_active_workflow'`;
-  - multiple non-archived workflows throws `ConflictException`;
+  - more than one active/non-terminal workflow throws `ConflictException` and returns no candidate predicate;
   - one active workflow returns redacted diagnostics.
 - Build fresh projections through one helper with explicit persistence behavior:
   - `buildProjectionForSession(sessionId, { persist: true })` for normal health/dashboard/diagnostics reads and recovery writes;
   - `buildProjectionForSession(sessionId, { persist: false })` for scavenge dry-run candidate computation.
+- Add `discoverSessionOperationCandidates(filters, actorContext, { persist })` as the only service helper used by `listHealth` and `scavenge`. It must:
+  - require Operator/Admin scope before discovery;
+  - pass authenticated organization/project support scope and server `now` into `repository.listActivePlanItemWorkflowSessionsForSessionOperations`;
+  - rebuild each discovered projection with the requested `persist` mode;
+  - filter by projection-level `state`, `severity`, and `recovered_state` after rebuild;
+  - never fall back to raw runtime/session routes or direct Codex inspection.
 - When `persist: true`, build retention pins from active session, checkpoint/product evidence, recovery records, ObjectEvents, and unrecoverable evidence references before upserting health and pins.
 - When `persist: false`, compute the same projection and pins in memory but do not call `upsertPlanItemSessionHealth`, `upsertCapsuleRetentionPins`, `createOrReplaySessionRecoveryRecord`, or `appendObjectEvent`.
 - `recover(sessionId, body, actorContext)` must return `RecoverSessionResponse`: `{ record, before, after, replayed }`, where `record` is `SessionRecoveryRecordDto` without the full predicate.
-- Before predicate matching, reject and record `result = 'blocked'`, `result_code = 'idempotency_key_mismatch'` when `body.operation_idempotency_key !== body.candidate_predicate.operation_idempotency_key`.
+- Every mutating recovery/scavenge candidate must run inside `repository.withObjectLock(operationLockKey, ...)`, where `operationLockKey` is `session-operations:${operationIdempotencyKey}`.
+- Inside that lock, call `repository.getSessionRecoveryRecordByOperationIdempotencyKey(operationIdempotencyKey)` before predicate matching or control-state mutation:
+  - if an existing record matches the incoming operation/session/reason/predicate digest, return it as `replayed: true` without rebuilding the stale predicate or changing state;
+  - if an existing record uses the same key but differs by operation/session/reason/predicate digest, fail closed as `session_operations_idempotency_conflict` before mutation;
+  - if no record exists, continue to candidate validation and mutation.
+- After the idempotency precheck and before predicate matching, reject and record `result = 'blocked'`, `result_code = 'idempotency_key_mismatch'` when `body.operation_idempotency_key !== body.candidate_predicate.operation_idempotency_key`.
 - After an applied recovery, persist the resulting health state as `recovered` or `unrecoverable` in `plan_item_session_health`; later `buildProjectionForSession(..., { persist: true })` must preserve that durable terminal operational state until a separate human product action explicitly clears it.
 
 Service skeleton:
@@ -1732,72 +2355,98 @@ export class SessionOperationsService {
   async recover(sessionId: string, body: RecoverSessionRequestDto, actorContext: ActorContext) {
     const actorId = this.requireActor(actorContext);
     await this.assertOperator(actorContext, sessionId);
-    const before = await this.buildProjectionForSession(sessionId, { persist: true });
+    const operationKey = body.operation_idempotency_key;
 
-    if (body.operation_idempotency_key !== body.candidate_predicate.operation_idempotency_key) {
-      const record = await this.writeBlockedRecoveryRecord({
-        before,
-        body,
-        actorId,
-        result_code: 'idempotency_key_mismatch',
-      });
-      throw new ConflictException({
-        message: 'Recovery idempotency key must match the candidate predicate.',
-        response: {
-          record: redactSessionRecoveryRecordDto(record),
-          before: redactOperatorSessionHealthProjection(before),
-          after: redactOperatorSessionHealthProjection(before),
-          replayed: false,
-        },
-      });
-    }
+    return this.repository.withObjectLock(`session-operations:${operationKey}`, async (lockedRepository) => {
+      const existing = await lockedRepository.getSessionRecoveryRecordByOperationIdempotencyKey(operationKey);
+      if (existing !== undefined) {
+        this.assertExistingRecoveryRecordMatchesIncoming(existing, {
+          operation: body.operation,
+          reason: body.reason,
+          codex_session_id: sessionId,
+          predicate_digest: sessionRecoveryProjectionDigest(body.candidate_predicate),
+        });
+        const current = await this.buildProjectionForSession(sessionId, { persist: false, repository: lockedRepository });
+        return {
+          record: redactSessionRecoveryRecordDto(existing),
+          replayed: true,
+          before: redactOperatorSessionHealthProjection(current),
+          after: redactOperatorSessionHealthProjection(current),
+        };
+      }
 
-    const predicateCheck = this.checkRecoveryPredicate(before, body.candidate_predicate);
-    if (predicateCheck.ok === false) {
-      const after = await this.buildProjectionForSession(sessionId, { persist: true });
-      const { record, replayed } = await this.repository.createOrReplaySessionRecoveryRecord(this.buildRecoveryRecordDraft({
+      const before = await this.buildProjectionForSession(sessionId, { persist: true, repository: lockedRepository });
+
+      if (operationKey !== body.candidate_predicate.operation_idempotency_key) {
+        const { record, replayed } = await lockedRepository.createOrReplaySessionRecoveryRecord(this.buildRecoveryRecordDraft({
+          before,
+          after: before,
+          body,
+          actorId,
+          result: 'blocked',
+          result_code: 'idempotency_key_mismatch',
+          objectEventRequired: false,
+        }));
+        throw new ConflictException({
+          message: 'Recovery idempotency key must match the candidate predicate.',
+          response: {
+            record: redactSessionRecoveryRecordDto(record),
+            before: redactOperatorSessionHealthProjection(before),
+            after: redactOperatorSessionHealthProjection(before),
+            replayed,
+          },
+        });
+      }
+
+      const predicateCheck = this.checkRecoveryPredicate(before, body.candidate_predicate);
+      if (predicateCheck.ok === false) {
+        const after = await this.buildProjectionForSession(sessionId, { persist: true, repository: lockedRepository });
+        const { record, replayed } = await lockedRepository.createOrReplaySessionRecoveryRecord(this.buildRecoveryRecordDraft({
+          before,
+          after,
+          body,
+          actorId,
+          result: 'skipped',
+          result_code: 'stale_candidate',
+          objectEventRequired: false,
+        }));
+        throw new ConflictException({
+          message: 'Recovery candidate is stale.',
+          response: {
+            record: redactSessionRecoveryRecordDto(record),
+            before: redactOperatorSessionHealthProjection(before),
+            after: redactOperatorSessionHealthProjection(after),
+            replayed,
+          },
+        });
+      }
+
+      const applied = await this.applyControlOnlyRecovery(before, body, actorId, lockedRepository);
+      await this.persistDurableOperationalState(sessionId, applied.after_state, lockedRepository);
+      const after = await this.buildProjectionForSession(sessionId, { persist: true, repository: lockedRepository });
+      const { record, replayed } = await lockedRepository.createOrReplaySessionRecoveryRecord(this.buildRecoveryRecordDraft({
         before,
         after,
         body,
         actorId,
-        result: 'skipped',
-        result_code: 'stale_candidate',
-        objectEventRequired: false,
+        result: applied.result,
+        result_code: applied.result_code,
+        objectEventRequired: applied.result === 'applied',
       }));
-      throw new ConflictException({
-        message: 'Recovery candidate is stale.',
-        response: {
-          record: redactSessionRecoveryRecordDto(record),
-          before: redactOperatorSessionHealthProjection(before),
-          after: redactOperatorSessionHealthProjection(after),
-          replayed,
-        },
-      });
-    }
-
-    const applied = await this.applyControlOnlyRecovery(before, body, actorId);
-    await this.persistDurableOperationalState(sessionId, applied.after_state);
-    const after = await this.buildProjectionForSession(sessionId, { persist: true });
-    const { record, replayed } = await this.repository.createOrReplaySessionRecoveryRecord(this.buildRecoveryRecordDraft({
-      before,
-      after,
-      body,
-      actorId,
-      result: applied.result,
-      result_code: applied.result_code,
-      objectEventRequired: applied.result === 'applied',
-    }));
-    return {
-      record: redactSessionRecoveryRecordDto(record),
-      replayed,
-      before: redactOperatorSessionHealthProjection(before),
-      after: redactOperatorSessionHealthProjection(after),
-    };
+      return {
+        record: redactSessionRecoveryRecordDto(record),
+        replayed,
+        before: redactOperatorSessionHealthProjection(before),
+        after: redactOperatorSessionHealthProjection(after),
+      };
+    });
   }
 }
 ```
 
-`buildRecoveryRecordDraft` + `repository.createOrReplaySessionRecoveryRecord` must run for applied, skipped, and blocked attempts. Applied attempts must include `object_event_id`; skipped and blocked no-op attempts may omit `object_event_id`, but their response and stored record must include an explicit `result_code`. `createOrReplaySessionRecoveryRecord` owns idempotency replay/conflict behavior; do not add a separate repository lookup method unless the repository contract is updated in Task 3.
+`assertExistingRecoveryRecordMatchesIncoming(existing, incoming)` must compare operation, target session, reason, and canonical predicate digest. It must not compare the current health projection, because successful prior recovery intentionally changes current health to `recovered`. If the comparison fails, throw `ConflictException` with a safe `session_operations_idempotency_conflict` reason before any mutation.
+
+`buildRecoveryRecordDraft` + `repository.createOrReplaySessionRecoveryRecord` must run for applied, skipped, and blocked attempts after the idempotency precheck. Applied attempts must include `object_event_id`; skipped and blocked no-op attempts may omit `object_event_id`, but their response and stored record must include an explicit `result_code`. `createOrReplaySessionRecoveryRecord` remains the final insertion/replay guard inside the same object lock; it must still enforce uniqueness for defense in depth.
 
 `redactSessionRecoveryRecordDto(record)` must drop the full `candidate_predicate` and expose only a public-safe predicate summary:
 
@@ -1834,7 +2483,7 @@ export class SessionOperationsService {
 `applyControlOnlyRecovery` must branch on product health state:
 
 - `blocked_stale_lease`: terminalize/release stale `CodexSessionLease`, clear stale session runner owner fields if they match the predicate, and set health to `recovered`.
-- `blocked_orphaned_action` with pending queued action: terminalize the queued action as stale/blocked with reason `session_operations_orphaned_action`, terminalize linked turn if needed, and set health to `recovered`.
+- `blocked_orphaned_action` with pending queued action: terminalize the queued action as stale/blocked with reason `session_operations_orphaned_action`, terminalize the linked turn when the predicate contains one, and set health to `recovered`.
 - `blocked_orphaned_action` with runtime job or run session: terminalize the runtime job/run session using existing terminal status conventions, record affected ids, and set health to `recovered`.
 - `blocked_missing_capsule`: block ordinary `recover` with `result = 'blocked'` and `result_code = 'unsupported_missing_capsule_recovery'`; allow only `mark_unrecoverable` to set health to `unrecoverable`.
 - `blocked_lineage_conflict`: block ordinary `recover` with `result = 'blocked'` and `result_code = 'unsupported_lineage_conflict_recovery'`; allow only `mark_unrecoverable` to set health to `unrecoverable`.
@@ -1869,16 +2518,23 @@ Modify `apps/control-plane-api/src/app.module.ts` to import `SessionOperationsMo
 Implement `SessionOperationsService.scavenge`:
 
 - Dry-run:
-  - list health projections by filters;
-  - rebuild projections with `persist: false` before returning candidates;
-  - return candidates and predicates;
+  - parse `body.filters` through `sessionOperationsFilterSchema`;
+  - call `discoverSessionOperationCandidates(filters, actorContext, { persist: false })`;
+  - return rebuilt candidates and predicates;
   - perform no mutations, including no health upsert and no retention pin upsert.
 - Execute:
   - require `confirm_execute === true`;
   - require `reason` and `operation_idempotency_key_prefix`;
   - require candidate predicates;
-  - call the same fenced recovery path per candidate with `persist: true`;
   - derive each candidate idempotency key as `${operation_idempotency_key_prefix}:${codex_session_id}:${candidate_predicate.projection_digest}`;
+  - process each candidate inside `repository.withObjectLock(candidateOperationLockKey, ...)`, where `candidateOperationLockKey` is `session-operations:${derivedOperationKey}`;
+  - before predicate revalidation or mutation, call `repository.getSessionRecoveryRecordByOperationIdempotencyKey(derivedOperationKey)`:
+    - identical existing scavenge record returns replayed result for that candidate;
+    - same key with different session/reason/predicate digest fails that candidate as blocked idempotency conflict without mutation;
+    - no record continues to predicate revalidation;
+  - call the same predicate revalidation and state-application helper per non-replayed candidate with `persist: true`, but bypass the single-session top-level-key equality guard;
+  - store that derived idempotency key on the scavenge `SessionRecoveryRecord`;
+  - keep `candidate_predicate.operation_idempotency_key` unchanged inside predicate summary/fencing comparisons;
   - use the shared `reason` for each generated `SessionRecoveryRecord`;
   - return per-candidate `applied`, `skipped`, or `blocked`;
   - write `SessionRecoveryRecord` for every attempted candidate.
@@ -2052,7 +2708,7 @@ Do not inject:
 - `PlanItemWorkflowService` command methods;
 - execution service.
 
-Add a code-level guard test if needed by scanning service source:
+Add a code-level guard test by scanning service source:
 
 ```ts
 it('keeps session operations recovery independent from Codex execution APIs', () => {
@@ -2097,24 +2753,112 @@ git commit -m "test: harden session recovery fencing"
 Modify `tests/web/api-client-contract.test.ts`:
 
 ```ts
+const recoverPredicateFixture = () => ({
+  codex_session_id: 'session-1',
+  workflow_id: 'workflow-1',
+  expected_health_state: 'blocked_stale_lease',
+  operation_idempotency_key: 'recover-session-1-stale-lease',
+  projection_digest: `sha256:${'a'.repeat(64)}`,
+  workflow: {
+    id: 'workflow-1',
+    status: 'execution_running',
+    updated_at: '2026-06-09T00:00:00.000Z',
+    active_codex_session_id: 'session-1',
+    active_boundary_summary_revision_id: null,
+    active_spec_doc_revision_id: null,
+    active_implementation_plan_doc_revision_id: null,
+    execution_package_id: null,
+  },
+  session: {
+    id: 'session-1',
+    status: 'active',
+    role: 'active',
+    updated_at: '2026-06-09T00:00:00.000Z',
+    active_lease_id: 'lease-1',
+    lease_epoch: 3,
+    runner_worker_id: null,
+    runner_launch_lease_id: null,
+    runner_runtime_job_id: null,
+    runner_expires_at: null,
+    latest_turn_id: null,
+    latest_capsule_id: null,
+    latest_capsule_digest: null,
+  },
+  active_lease: {
+    checked: true,
+    state: 'present',
+    id: 'lease-1',
+    status: 'active',
+    lease_epoch: 3,
+    worker_id: 'worker-1',
+    worker_session_digest: `sha256:${'b'.repeat(64)}`,
+    heartbeat_at: '2026-06-09T00:01:00.000Z',
+    expires_at: '2026-06-09T00:02:00.000Z',
+    updated_at: '2026-06-09T00:01:00.000Z',
+  },
+  pending_queued_action: { checked: true, state: 'absent' },
+  latest_turn: { checked: true, state: 'absent' },
+  runtime_job: { checked: true, state: 'absent' },
+  run_session: { checked: true, state: 'absent' },
+  latest_capsule: { checked: true, state: 'absent' },
+  observed_at: '2026-06-09T00:03:00.000Z',
+});
+
 it('calls product-level session operations routes', async () => {
-  const queryApi = createForgeloopQueryApi({ baseUrl: 'http://example.test' });
-  const commandApi = createForgeloopCommandApi({ baseUrl: 'http://example.test' });
-  const calls = captureFetchCalls();
+  const responses = [
+    { items: [], filters: { state: 'blocked_stale_lease' } },
+    {
+      plan_item_id: 'item-1',
+      workflow_resolution: 'active_workflow',
+      summary: 'Worker lease expired.',
+      operator_intervention_required: true,
+      normal_workflow_actions_available: false,
+      recovery_request_available: true,
+    },
+    { record: { id: 'recovery-1' }, before: {}, after: {}, replayed: false },
+    { mode: 'dry_run', candidates: [] },
+  ];
+  const fetchMock = vi.fn(async () =>
+    new Response(JSON.stringify(responses.shift()), {
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+    }),
+  );
+  const queryApi = createForgeloopQueryApi({ baseUrl: 'http://api.local', fetch: fetchMock });
+  const commandApi = createForgeloopCommandApi({ baseUrl: 'http://api.local', fetch: fetchMock });
 
   await queryApi.listSessionOperationsHealth({ state: 'blocked_stale_lease' });
   await queryApi.getPlanItemSessionDiagnostics('item-1');
-  await commandApi.recoverSession('session-1', recoverBodyFixture());
+  await commandApi.recoverSession('session-1', {
+    operation_idempotency_key: 'recover-session-1-stale-lease',
+    operation: 'recover',
+    reason: 'Release stale worker lease.',
+    candidate_predicate: recoverPredicateFixture(),
+  });
   await commandApi.scavengeSessionOperations({ mode: 'dry_run' });
 
-  expect(calls.paths()).toContain('/session-operations/health?state=blocked_stale_lease');
-  expect(calls.paths()).toContain('/plan-items/item-1/session-diagnostics');
-  expect(calls.paths()).toContain('/session-operations/session-1/recover');
-  expect(calls.paths()).toContain('/session-operations/scavenge');
+  expect(fetchMock).toHaveBeenNthCalledWith(
+    1,
+    'http://api.local/session-operations/health?state=blocked_stale_lease',
+    expect.objectContaining({ method: 'GET' }),
+  );
+  expect(fetchMock).toHaveBeenNthCalledWith(
+    2,
+    'http://api.local/plan-items/item-1/session-diagnostics',
+    expect.objectContaining({ method: 'GET' }),
+  );
+  expect(fetchMock).toHaveBeenNthCalledWith(
+    3,
+    'http://api.local/session-operations/session-1/recover',
+    expect.objectContaining({ method: 'POST' }),
+  );
+  expect(fetchMock).toHaveBeenNthCalledWith(
+    4,
+    'http://api.local/session-operations/scavenge',
+    expect.objectContaining({ method: 'POST' }),
+  );
 });
 ```
-
-Adapt to the existing API-client test helpers.
 
 - [ ] **Step 2: Write failing dashboard route test**
 
@@ -2185,6 +2929,7 @@ describe('session operations dashboard route', () => {
           {
             codex_session_id: 'session-1',
             workflow_id: 'workflow-1',
+            project_id: 'project-1',
             development_plan_item_id: 'item-1',
             state: 'blocked_stale_lease',
             severity: 'blocked',
@@ -2192,8 +2937,10 @@ describe('session operations dashboard route', () => {
             recovery_available: true,
             recovery_operation_labels: ['recover'],
             operator_intervention_required: true,
+            normal_workflow_actions_available: false,
             retention_risk: false,
             lineage_risk: false,
+            retention_pins: [],
             checked_at: '2026-06-09T00:00:00.000Z',
             candidate_predicate: recoverPredicateFixture(),
           },
@@ -2201,12 +2948,12 @@ describe('session operations dashboard route', () => {
       />,
     );
 
-    expect(screen.getByText('Session Operations')).toBeInTheDocument();
-    expect(screen.getByText('Worker lease expired.')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /recover/i })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /mark unrecoverable/i })).toBeInTheDocument();
-    expect(screen.queryByText(/worker_session_digest/i)).not.toBeInTheDocument();
-    expect(screen.queryByText(/codex_thread_id/i)).not.toBeInTheDocument();
+    expect(screen.getByText('Session Operations')).toBeTruthy();
+    expect(screen.getByText('Worker lease expired.')).toBeTruthy();
+    expect(screen.getByRole('button', { name: /recover/i })).toBeTruthy();
+    expect(screen.getByRole('button', { name: /mark unrecoverable/i })).toBeTruthy();
+    expect(screen.queryByText(/worker_session_digest/i)).toBeNull();
+    expect(screen.queryByText(/codex_thread_id/i)).toBeNull();
   });
 
   it('requires operator reason and idempotency prefix before executing selected scavenge candidates', async () => {
@@ -2216,6 +2963,7 @@ describe('session operations dashboard route', () => {
           {
             codex_session_id: 'session-1',
             workflow_id: 'workflow-1',
+            project_id: 'project-1',
             development_plan_item_id: 'item-1',
             state: 'blocked_stale_lease',
             severity: 'blocked',
@@ -2223,8 +2971,10 @@ describe('session operations dashboard route', () => {
             recovery_available: true,
             recovery_operation_labels: ['recover'],
             operator_intervention_required: true,
+            normal_workflow_actions_available: false,
             retention_risk: false,
             lineage_risk: false,
+            retention_pins: [],
             checked_at: '2026-06-09T00:00:00.000Z',
             candidate_predicate: recoverPredicateFixture(),
           },
@@ -2233,15 +2983,15 @@ describe('session operations dashboard route', () => {
     );
 
     await userEvent.click(screen.getByRole('checkbox', { name: /select session-1/i }));
-    const execute = screen.getByRole('button', { name: /execute selected scavenge/i });
-    expect(execute).toBeDisabled();
+    const execute = screen.getByRole('button', { name: /execute selected scavenge/i }) as HTMLButtonElement;
+    expect(execute.disabled).toBe(true);
 
     await userEvent.type(screen.getByLabelText(/scavenge reason/i), 'Operator-reviewed stale lease cleanup.');
-    expect(execute).toBeDisabled();
+    expect(execute.disabled).toBe(true);
 
     await userEvent.type(screen.getByLabelText(/idempotency prefix/i), 'scavenge-session-1');
     await userEvent.click(screen.getByRole('checkbox', { name: /confirm execute/i }));
-    expect(execute).toBeEnabled();
+    expect(execute.disabled).toBe(false);
   });
 });
 ```
@@ -2385,10 +3135,10 @@ Modify `tests/web/development-plan-routes.test.tsx`:
 
 ```tsx
 it('shows Plan Item session diagnostics without operator-only recovery controls', async () => {
-  server.use(
-    http.get('/plan-items/:planItemId/session-diagnostics', () =>
-      HttpResponse.json({
-        plan_item_id: 'dpi-1',
+  const screen = await renderRoute(`/development-plans/${developmentPlan.id}/items/${developmentPlanItem.id}`, {
+    apiOverrides: {
+      [`GET /plan-items/${developmentPlanItem.id}/session-diagnostics`]: {
+        plan_item_id: developmentPlanItem.id,
         workflow_resolution: 'active_workflow',
         workflow_id: 'workflow-1',
         codex_session_id: 'session-1',
@@ -2398,23 +3148,21 @@ it('shows Plan Item session diagnostics without operator-only recovery controls'
         operator_intervention_required: true,
         normal_workflow_actions_available: false,
         recovery_request_available: true,
-      }),
-    ),
-  );
+      },
+    },
+  });
 
-  renderDevelopmentPlanItemRoute('/development-plans/dp-1/items/dpi-1');
-
-  expect(await screen.findByText('Session health')).toBeInTheDocument();
-  expect(screen.getByText('Operator recovery is required before the workflow can continue.')).toBeInTheDocument();
-  expect(screen.queryByRole('button', { name: /recover/i })).not.toBeInTheDocument();
-  expect(screen.queryByText(/candidate_predicate/i)).not.toBeInTheDocument();
+  expect(await screen.findByText('Session health')).toBeTruthy();
+  expect(screen.getByText('Operator recovery is required before the workflow can continue.')).toBeTruthy();
+  expect(screen.queryByRole('button', { name: /recover/i })).toBeNull();
+  expect(screen.queryByText(/candidate_predicate/i)).toBeNull();
 });
 
 it('shows recovered state as waiting for a separate human product action', async () => {
-  server.use(
-    http.get('/plan-items/:planItemId/session-diagnostics', () =>
-      HttpResponse.json({
-        plan_item_id: 'dpi-1',
+  const screen = await renderRoute(`/development-plans/${developmentPlan.id}/items/${developmentPlanItem.id}`, {
+    apiOverrides: {
+      [`GET /plan-items/${developmentPlanItem.id}/session-diagnostics`]: {
+        plan_item_id: developmentPlanItem.id,
         workflow_resolution: 'active_workflow',
         workflow_id: 'workflow-1',
         codex_session_id: 'session-1',
@@ -2424,17 +3172,15 @@ it('shows recovered state as waiting for a separate human product action', async
         operator_intervention_required: false,
         normal_workflow_actions_available: false,
         recovery_request_available: false,
-      }),
-    ),
-  );
+      },
+    },
+  });
 
-  renderDevelopmentPlanItemRoute('/development-plans/dp-1/items/dpi-1');
-
-  expect(await screen.findByText('Control state recovered. Choose a separate product action before continuing.')).toBeInTheDocument();
-  expect(screen.getByText(/Continue, fork, and archive remain separate human actions/i)).toBeInTheDocument();
-  expect(screen.queryByRole('button', { name: /^continue$/i })).not.toBeInTheDocument();
-  expect(screen.queryByRole('button', { name: /fork/i })).not.toBeInTheDocument();
-  expect(screen.queryByRole('button', { name: /archive/i })).not.toBeInTheDocument();
+  expect(await screen.findByText('Control state recovered. Choose a separate product action before continuing.')).toBeTruthy();
+  expect(screen.getByText(/Continue, fork, and archive remain separate human actions/i)).toBeTruthy();
+  expect(screen.queryByRole('button', { name: /^continue$/i })).toBeNull();
+  expect(screen.queryByRole('button', { name: /fork/i })).toBeNull();
+  expect(screen.queryByRole('button', { name: /archive/i })).toBeNull();
 });
 ```
 
@@ -2531,8 +3277,14 @@ git commit -m "feat: show plan item session diagnostics"
 Modify `tests/smoke/codex-runtime-no-baggage-gate.test.ts`:
 
 ```ts
+import {
+  codexRuntimeSuperpowersNoBaggageAllowlist,
+  codexRuntimeSuperpowersNoBaggageScanTargets,
+  scanCodexRuntimeSuperpowersNoBaggage,
+} from '../../scripts/check-codex-runtime-superpowers-no-baggage';
+
 it('keeps session operations product-level and control-only', () => {
-  const scan = scanCodexRuntimeSuperpowersNoBaggage();
+  const scan = scanCodexRuntimeSuperpowersNoBaggage({});
   expect(scan.ok).toBe(true);
 
   const service = readFileSync('apps/control-plane-api/src/modules/session-operations/session-operations.service.ts', 'utf8');
@@ -2608,7 +3360,9 @@ Modify `scripts/check-codex-runtime-superpowers-no-baggage.ts`:
 - Add `apps/web/src/features/session-operations` to scan roots.
 - Add `docs/runbooks/plan-item-session-operations.md` to scan files or roots.
 - Add `scripts/session-operations-scavenge.ts` to scan files.
-- Add new forbidden patterns if needed for raw recovery route naming or hidden continue/fork/delete.
+- Export `codexRuntimeSuperpowersNoBaggageScanTargets(rootDir = process.cwd()): string[]`, returning the resolved default scan file list used by `scanCodexRuntimeSuperpowersNoBaggage`.
+- Refactor `scanCodexRuntimeSuperpowersNoBaggage` to call `codexRuntimeSuperpowersNoBaggageScanTargets(rootDir)` when `input.files` is not provided, so the test and scanner share the same target source.
+- Add forbidden patterns for raw recovery route naming or hidden continue/fork/delete when a new public Session Operations route tries to expose runtime-worker controls outside `/session-operations/*`.
 
 - [ ] **Step 5: Create operator scavenge wrapper**
 
