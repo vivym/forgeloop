@@ -137,7 +137,10 @@ export const buildSessionHealthProjection = (input: BuildSessionHealthProjection
   const retentionRisk = retentionPins.some((pin) => pin.pin_state === 'unknown' || pin.pin_state === 'not_cleanable');
   const lineageRisk = state === 'blocked_lineage_conflict';
   const workflowResolution = input.workflow_resolution ?? (input.workflow === undefined ? 'no_active_workflow' : 'active_workflow');
-  const recoveryAvailable = recoveryStates.has(state);
+  const hasActiveWorkflowResolution = workflowResolution === 'active_workflow';
+  const recoveryAvailable = hasActiveWorkflowResolution && recoveryStates.has(state);
+  const operatorInterventionRequired = !hasActiveWorkflowResolution || (state !== 'healthy' && state !== 'recovered');
+  const normalWorkflowActionsAvailable = hasActiveWorkflowResolution && (state === 'healthy' || state === 'attention_needed');
   const base = optionalObject<OperatorSessionHealthProjection>({
     codex_session_id: input.session?.id ?? input.workflow?.active_codex_session_id ?? 'unknown-codex-session',
     project_id: input.project_id,
@@ -150,13 +153,13 @@ export const buildSessionHealthProjection = (input: BuildSessionHealthProjection
     checked_at: input.checked_at,
     recovery_available: recoveryAvailable,
     recovery_operation_labels: recoveryAvailable ? ['recover', 'mark_unrecoverable'] : [],
-    operator_intervention_required: state !== 'healthy' && state !== 'recovered',
-    normal_workflow_actions_available: state === 'healthy' || state === 'attention_needed',
+    operator_intervention_required: operatorInterventionRequired,
+    normal_workflow_actions_available: normalWorkflowActionsAvailable,
     retention_risk: retentionRisk,
     lineage_risk: lineageRisk,
     latest_checkpoint: input.latest_checkpoint,
     retention_pins: retentionPins,
-    workflow_id: input.workflow?.id ?? input.session?.owner_id,
+    workflow_id: input.workflow?.id,
     development_plan_id: input.workflow?.development_plan_id,
     development_plan_item_id: input.workflow?.development_plan_item_id,
   });
@@ -172,7 +175,15 @@ export const buildSessionHealthProjection = (input: BuildSessionHealthProjection
   const diagnostics = redactPlanItemSessionDiagnostics({
     ...withDigest,
     ...(candidate_predicate === undefined ? {} : { candidate_predicate }),
-    diagnostics: undefined as never,
+    diagnostics: {
+      plan_item_id: input.plan_item_id ?? input.workflow?.development_plan_item_id ?? 'unknown-plan-item',
+      workflow_resolution: workflowResolution,
+      summary: withDigest.summary,
+      operator_intervention_required: operatorInterventionRequired,
+      normal_workflow_actions_available: normalWorkflowActionsAvailable,
+      recovery_request_available: recoveryAvailable,
+      ...(input.workflow === undefined ? {} : { workflow_id: input.workflow.id }),
+    },
   } as PlanItemSessionHealth);
   return optionalObject<PlanItemSessionHealth>({
     ...withDigest,
@@ -456,7 +467,10 @@ export const assertRecoveryIdempotencyNotConflicting = (
 };
 
 const deriveState = (input: BuildSessionHealthProjectionInput): PlanItemSessionHealthState => {
-  if (input.session === undefined || input.workflow?.active_codex_session_id !== input.session.id || input.session.owner_id !== input.workflow.id) {
+  if (input.session === undefined || input.workflow === undefined) {
+    return 'blocked_lineage_conflict';
+  }
+  if (input.workflow.active_codex_session_id !== input.session.id || input.session.owner_id !== input.workflow.id) {
     return 'blocked_lineage_conflict';
   }
   if (input.session.latest_capsule_id !== undefined && input.latest_capsule === undefined) {

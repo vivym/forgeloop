@@ -246,6 +246,70 @@ describe('session operations domain helpers', () => {
     }
   });
 
+  it('missing workflow with present session does not throw and fail-closes lineage', () => {
+    const projection = buildSessionHealthProjection(
+      baseInput({
+        workflow: undefined,
+        workflow_resolution: 'no_active_workflow',
+      }),
+    );
+    const diagnostics = redactPlanItemSessionDiagnostics(projection);
+
+    expect(projection).toMatchObject({
+      state: 'blocked_lineage_conflict',
+      severity: 'critical',
+      recovery_available: false,
+      operator_intervention_required: true,
+      normal_workflow_actions_available: false,
+      lineage_risk: true,
+    });
+    expect(diagnostics).toMatchObject({
+      workflow_resolution: 'no_active_workflow',
+      codex_session_id: 'session-1',
+      normal_workflow_actions_available: false,
+      recovery_request_available: false,
+    });
+    expect(diagnostics).not.toHaveProperty('workflow_id');
+  });
+
+  it('preserves explicit ambiguous workflow resolution in public diagnostics', () => {
+    const projection = buildSessionHealthProjection(
+      baseInput({
+        workflow_resolution: 'ambiguous_workflows',
+      }),
+    );
+    const diagnostics = redactPlanItemSessionDiagnostics(projection);
+
+    expect(diagnostics).toMatchObject({
+      workflow_resolution: 'ambiguous_workflows',
+      operator_intervention_required: true,
+      normal_workflow_actions_available: false,
+      recovery_request_available: false,
+    });
+  });
+
+  it('preserves explicit no active workflow resolution in public diagnostics', () => {
+    const projection = buildSessionHealthProjection(
+      baseInput({
+        workflow: undefined,
+        session: undefined,
+        latest_capsule: undefined,
+        active_lease: undefined,
+        workflow_resolution: 'no_active_workflow',
+      }),
+    );
+    const diagnostics = redactPlanItemSessionDiagnostics(projection);
+
+    expect(diagnostics).toMatchObject({
+      workflow_resolution: 'no_active_workflow',
+      operator_intervention_required: true,
+      normal_workflow_actions_available: false,
+      recovery_request_available: false,
+    });
+    expect(diagnostics).not.toHaveProperty('workflow_id');
+    expect(diagnostics).not.toHaveProperty('codex_session_id');
+  });
+
   it('missing or mismatched latest capsule projects blocked_missing_capsule', () => {
     for (const input of [
       baseInput({ latest_capsule: undefined }),
