@@ -464,6 +464,16 @@ describe('session operations contracts', () => {
         candidate_predicate: candidatePredicate,
       }).success,
     ).toBe(false);
+
+    expect(
+      recoverSessionRequestSchema.safeParse({
+        operation: 'recover',
+        session_id: 'session-1',
+        reason: 'Recover the fenced session.',
+        operation_idempotency_key: 'recover:session-1:predicate-1',
+        candidate_predicate: candidatePredicate,
+      }).success,
+    ).toBe(false);
   });
 
   it('coerces numeric session operations filter fields from strings', () => {
@@ -512,6 +522,7 @@ describe('session operations contracts', () => {
     expect(sessionOperationsFilterSchema.safeParse({ limit: '101' }).success).toBe(false);
     expect(sessionOperationsFilterSchema.safeParse({ health_states: [] }).success).toBe(false);
     expect(sessionOperationsFilterSchema.safeParse({ severities: [] }).success).toBe(false);
+    expect(sessionOperationsFilterSchema.safeParse({ session_id: 'session-1' }).success).toBe(false);
   });
 
   it('coerces numeric session operations health query fields from strings', () => {
@@ -558,6 +569,7 @@ describe('session operations contracts', () => {
     }
 
     expect(sessionOperationsHealthQuerySchema.safeParse({ limit: '101' }).success).toBe(false);
+    expect(sessionOperationsHealthQuerySchema.safeParse({ session_id: 'session-1' }).success).toBe(false);
     expect(
       sessionOperationsHealthQuerySchema.safeParse({
         health_state: 'blocked_stale_lease',

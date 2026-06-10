@@ -213,7 +213,6 @@ export const sessionOperationsFilterSchema = z
     development_plan_item_id: nonEmpty.optional(),
     project_id: nonEmpty.optional(),
     workflow_id: nonEmpty.optional(),
-    session_id: nonEmpty.optional(),
     codex_session_id: nonEmpty.optional(),
     worker_id: nonEmpty.optional(),
     state: planItemSessionHealthStateSchema.optional(),
@@ -254,7 +253,6 @@ export const sessionOperationsHealthQuerySchema = z
     development_plan_item_id: nonEmpty.optional(),
     project_id: nonEmpty.optional(),
     workflow_id: nonEmpty.optional(),
-    session_id: nonEmpty.optional(),
     codex_session_id: nonEmpty.optional(),
     worker_id: nonEmpty.optional(),
     state: planItemSessionHealthStateSchema.optional(),
@@ -286,7 +284,6 @@ export type SessionOperationsHealthQuery = z.infer<typeof sessionOperationsHealt
 export const recoverSessionRequestSchema = z
   .object({
     operation: z.enum(['recover', 'mark_unrecoverable']),
-    session_id: nonEmpty.optional(),
     reason: nonEmpty,
     operation_idempotency_key: nonEmpty,
     candidate_predicate: sessionRecoveryCandidatePredicateSchema,
