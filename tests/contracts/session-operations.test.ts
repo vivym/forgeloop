@@ -643,6 +643,128 @@ describe('session operations contracts', () => {
     });
   });
 
+  it('rejects stale session operations health response envelope fields', () => {
+    const healthResponse = {
+      items: [operatorProjection],
+      filters: {
+        state: 'blocked_stale_lease',
+        codex_session_id: 'session-1',
+        limit: '25',
+      },
+    } as const;
+
+    expect(sessionOperationsHealthResponseSchema.parse(healthResponse)).toMatchObject({
+      items: [{ codex_session_id: 'session-1', state: 'blocked_stale_lease' }],
+      filters: { limit: 25 },
+    });
+    expect(sessionOperationsHealthResponseSchema.safeParse({ items: [operatorProjection] }).success).toBe(false);
+
+    for (const staleField of [
+      ['generated_at', iso],
+      ['total_count', 1],
+    ] as const) {
+      expect(
+        sessionOperationsHealthResponseSchema.safeParse({
+          ...healthResponse,
+          [staleField[0]]: staleField[1],
+        }).success,
+      ).toBe(false);
+    }
+  });
+
+  it('rejects stale session operations audit response envelope fields', () => {
+    const auditResponse = {
+      items: [recoveryRecord],
+    } as const;
+
+    expect(sessionOperationsAuditResponseSchema.parse(auditResponse)).toMatchObject({
+      items: [{ operation: 'recover', result: 'applied' }],
+    });
+
+    for (const staleField of [
+      ['generated_at', iso],
+      ['records', [recoveryRecord]],
+      ['next_cursor', 'cursor-1'],
+      ['has_more', false],
+    ] as const) {
+      expect(
+        sessionOperationsAuditResponseSchema.safeParse({
+          ...auditResponse,
+          [staleField[0]]: staleField[1],
+        }).success,
+      ).toBe(false);
+    }
+  });
+
+  it('rejects stale scavenge session operations response aliases and counters', () => {
+    const scavengeResponse = {
+      mode: 'dry_run',
+      candidates: [operatorProjection],
+      results: [recoveryRecord],
+    } as const;
+
+    expect(scavengeSessionOperationsResponseSchema.parse(scavengeResponse)).toMatchObject({
+      mode: 'dry_run',
+      candidates: [{ codex_session_id: 'session-1' }],
+      results: [{ operation: 'recover', result: 'applied' }],
+    });
+
+    for (const staleField of [
+      ['generated_at', iso],
+      ['planned_candidates', [operatorProjection]],
+      ['recovery_records', [recoveryRecord]],
+      ['accepted_count', 1],
+      ['rejected_count', 0],
+      ['skipped_count', 0],
+    ] as const) {
+      expect(
+        scavengeSessionOperationsResponseSchema.safeParse({
+          ...scavengeResponse,
+          [staleField[0]]: staleField[1],
+        }).success,
+      ).toBe(false);
+    }
+  });
+
+  it('rejects stale recover session response status fields', () => {
+    const recoverResponse = {
+      record: recoveryRecord,
+      before: operatorProjection,
+      after: {
+        ...operatorProjection,
+        state: 'recovered',
+        recovery_available: false,
+        operator_intervention_required: false,
+        projection_digest: digest('a'),
+        candidate_predicate: undefined,
+      },
+      replayed: false,
+    } as const;
+
+    expect(recoverSessionResponseSchema.parse(recoverResponse)).toMatchObject({
+      record: { operation: 'recover', result: 'applied' },
+      before: { state: 'blocked_stale_lease' },
+      after: { state: 'recovered' },
+      replayed: false,
+    });
+
+    for (const staleField of [
+      ['status', 'accepted'],
+      ['operation_id', 'operation-1'],
+      ['session_id', 'session-1'],
+      ['operation_idempotency_key', 'recover:session-1:predicate-1'],
+      ['recovery_record', recoveryRecord],
+      ['rejection_reason', 'Predicate no longer matched.'],
+    ] as const) {
+      expect(
+        recoverSessionResponseSchema.safeParse({
+          ...recoverResponse,
+          [staleField[0]]: staleField[1],
+        }).success,
+      ).toBe(false);
+    }
+  });
+
   it('keeps public diagnostics free of operator-only recovery material', () => {
     const diagnostics = {
       plan_item_id: 'plan-item-1',

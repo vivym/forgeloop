@@ -309,10 +309,8 @@ export type RecoverSessionRequest = z.infer<typeof recoverSessionRequestSchema>;
 
 export const sessionOperationsHealthResponseSchema = z
   .object({
-    generated_at: isoDateTimeSchema.optional(),
-    filters: sessionOperationsFilterSchema.optional(),
     items: z.array(operatorSessionHealthProjectionSchema),
-    total_count: nonNegativeIntegerSchema.optional(),
+    filters: sessionOperationsFilterSchema,
   })
   .strict();
 export type SessionOperationsHealthResponse = z.infer<typeof sessionOperationsHealthResponseSchema>;
@@ -370,9 +368,6 @@ export type SessionRecoveryRecordDto = z.infer<typeof sessionRecoveryRecordDtoSc
 export const sessionOperationsAuditResponseSchema = z
   .object({
     items: z.array(sessionRecoveryRecordDtoSchema),
-    generated_at: isoDateTimeSchema.optional(),
-    next_cursor: nonEmpty.optional(),
-    has_more: z.boolean().optional(),
   })
   .strict();
 export type SessionOperationsAuditResponse = z.infer<typeof sessionOperationsAuditResponseSchema>;
@@ -383,43 +378,8 @@ export const recoverSessionResponseSchema = z
     before: operatorSessionHealthProjectionSchema,
     after: operatorSessionHealthProjectionSchema,
     replayed: z.boolean(),
-    status: z.enum(['accepted', 'already_completed', 'rejected']).optional(),
-    operation_id: nonEmpty.optional(),
-    session_id: nonEmpty.optional(),
-    operation_idempotency_key: nonEmpty.optional(),
-    recovery_record: sessionRecoveryRecordDtoSchema.optional(),
-    rejection_reason: nonEmpty.optional(),
   })
-  .strict()
-  .superRefine((response, ctx) => {
-    if (response.status === undefined) {
-      return;
-    }
-
-    if ((response.status === 'accepted' || response.status === 'already_completed') && response.recovery_record === undefined) {
-      ctx.addIssue({
-        code: 'custom',
-        path: ['recovery_record'],
-        message: `${response.status} recover session responses require recovery_record`,
-      });
-    }
-
-    if (response.status === 'rejected' && response.rejection_reason === undefined) {
-      ctx.addIssue({
-        code: 'custom',
-        path: ['rejection_reason'],
-        message: 'rejected recover session responses require rejection_reason',
-      });
-    }
-
-    if (response.status === 'rejected' && response.recovery_record !== undefined) {
-      ctx.addIssue({
-        code: 'custom',
-        path: ['recovery_record'],
-        message: 'rejected recover session responses must not include recovery_record',
-      });
-    }
-  });
+  .strict();
 export type RecoverSessionResponse = z.infer<typeof recoverSessionResponseSchema>;
 
 export const scavengeSessionOperationsCandidateSchema = z
@@ -482,14 +442,8 @@ export type ScavengeSessionOperationsRequest = z.infer<typeof scavengeSessionOpe
 export const scavengeSessionOperationsResponseSchema = z
   .object({
     mode: z.enum(['dry_run', 'execute']),
-    generated_at: isoDateTimeSchema.optional(),
     candidates: z.array(operatorSessionHealthProjectionSchema).default([]),
     results: z.array(sessionRecoveryRecordDtoSchema).default([]),
-    planned_candidates: z.array(operatorSessionHealthProjectionSchema).optional(),
-    recovery_records: z.array(sessionRecoveryRecordDtoSchema).optional(),
-    accepted_count: nonNegativeIntegerSchema.optional(),
-    rejected_count: nonNegativeIntegerSchema.optional(),
-    skipped_count: nonNegativeIntegerSchema.optional(),
   })
   .strict();
 export type ScavengeSessionOperationsResponse = z.infer<typeof scavengeSessionOperationsResponseSchema>;
