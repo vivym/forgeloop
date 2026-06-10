@@ -109,7 +109,14 @@ export type DomainErrorCode =
   | 'workflow_execution_cancel_pending'
   | 'workflow_abandon_next_action_mismatch'
   | 'workflow_capsule_digest_mismatch'
-  | 'workflow_context_digest_mismatch';
+  | 'workflow_context_digest_mismatch'
+  | 'session_operations_unauthorized'
+  | 'session_operations_no_active_workflow'
+  | 'session_operations_ambiguous_workflow'
+  | 'session_operations_stale_candidate'
+  | 'session_operations_idempotency_conflict'
+  | 'session_operations_unsupported_operation'
+  | 'session_operations_control_only_violation';
 
 export class DomainError extends Error {
   readonly code: DomainErrorCode;
