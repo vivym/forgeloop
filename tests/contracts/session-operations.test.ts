@@ -129,11 +129,14 @@ const predicateSummary = {
 
 const operatorProjection = {
   codex_session_id: 'session-1',
+  project_id: 'project-1',
+  organization_id: 'organization-1',
   workflow_id: 'workflow-1',
   development_plan_id: 'plan-1',
   development_plan_item_id: 'plan-item-1',
   state: 'blocked_stale_lease',
   severity: 'blocked',
+  reason_code: 'stale_lease',
   summary: 'The active session lease is stale.',
   projection_digest: digest('0'),
   checked_at: iso,
@@ -143,6 +146,11 @@ const operatorProjection = {
   normal_workflow_actions_available: false,
   retention_risk: true,
   lineage_risk: true,
+  latest_checkpoint: {
+    checkpoint_id: 'checkpoint-1',
+    created_at: iso,
+    projection_digest: digest('9'),
+  },
   retention_pins: [
     {
       capsule_id: 'capsule-1',
@@ -376,7 +384,10 @@ describe('session operations contracts', () => {
       operatorSessionHealthProjectionSchema.parse(operatorProjection),
     ).toMatchObject({
       codex_session_id: 'session-1',
+      project_id: 'project-1',
       state: 'blocked_stale_lease',
+      severity: 'blocked',
+      reason_code: 'stale_lease',
       summary: 'The active session lease is stale.',
       projection_digest: digest('0'),
       checked_at: iso,
@@ -384,6 +395,11 @@ describe('session operations contracts', () => {
       recovery_operation_labels: ['recover', 'mark_unrecoverable'],
       operator_intervention_required: true,
       normal_workflow_actions_available: false,
+      latest_checkpoint: {
+        checkpoint_id: 'checkpoint-1',
+        created_at: iso,
+        projection_digest: digest('9'),
+      },
       retention_pins: [
         {
           capsule_id: 'capsule-1',
@@ -398,6 +414,11 @@ describe('session operations contracts', () => {
         operation_idempotency_key: 'recover:session-1:predicate-1',
       },
     });
+  });
+
+  it('requires project scope on operator health projections', () => {
+    const { project_id: _projectId, ...withoutProject } = operatorProjection;
+    expect(operatorSessionHealthProjectionSchema.safeParse(withoutProject).success).toBe(false);
   });
 
   it('exposes plan-aligned public diagnostics without raw recovery internals', () => {

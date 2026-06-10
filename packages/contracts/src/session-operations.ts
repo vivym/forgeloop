@@ -200,7 +200,11 @@ export type PlanItemSessionDiagnostics = z.infer<typeof planItemSessionDiagnosti
 export const operatorSessionHealthProjectionSchema = z
   .object({
     codex_session_id: nonEmpty,
+    project_id: nonEmpty,
+    organization_id: nonEmpty.optional(),
     state: planItemSessionHealthStateSchema,
+    severity: planItemSessionHealthSeveritySchema,
+    reason_code: nonEmpty.optional(),
     summary: nonEmpty,
     projection_digest: safeDigestSchema,
     checked_at: isoDateTimeSchema,
@@ -210,12 +214,19 @@ export const operatorSessionHealthProjectionSchema = z
     normal_workflow_actions_available: z.boolean(),
     retention_risk: z.boolean(),
     lineage_risk: z.boolean(),
+    latest_checkpoint: z
+      .object({
+        checkpoint_id: nonEmpty,
+        created_at: isoDateTimeSchema,
+        projection_digest: safeDigestSchema.optional(),
+      })
+      .strict()
+      .optional(),
     retention_pins: z.array(capsuleRetentionPinSchema).default([]),
     candidate_predicate: sessionRecoveryCandidatePredicateSchema.optional(),
     workflow_id: nonEmpty.optional(),
     development_plan_id: nonEmpty.optional(),
     development_plan_item_id: nonEmpty.optional(),
-    severity: planItemSessionHealthSeveritySchema.optional(),
     diagnostics: planItemSessionDiagnosticsSchema.optional(),
   })
   .strict();
