@@ -137,8 +137,8 @@ const operatorProjection = {
   recovery_operation_labels: ['recover', 'mark_unrecoverable'],
   operator_intervention_required: true,
   normal_workflow_actions_available: false,
-  retention_risk: 'latest capsule is pinned by the stale turn.',
-  lineage_risk: 'queued action is fenced to the stale turn.',
+  retention_risk: true,
+  lineage_risk: true,
   retention_pins: [
     {
       pin_state: 'pinned',
@@ -688,6 +688,22 @@ describe('session operations contracts', () => {
         }).success,
       ).toBe(false);
     }
+  });
+
+  it('requires operator projection risk flags to be booleans', () => {
+    expect(
+      operatorSessionHealthProjectionSchema.safeParse({
+        ...operatorProjection,
+        retention_risk: 'latest capsule is pinned by the stale turn.',
+      }).success,
+    ).toBe(false);
+
+    expect(
+      operatorSessionHealthProjectionSchema.safeParse({
+        ...operatorProjection,
+        lineage_risk: 'queued action is fenced to the stale turn.',
+      }).success,
+    ).toBe(false);
   });
 
   it('accepts plan-aligned health, audit, scavenge, and recover responses', () => {
