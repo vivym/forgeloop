@@ -181,8 +181,19 @@ describe('session operations contracts', () => {
       observed_at: iso,
     });
 
-    const { latest_capsule: _latestCapsule, ...missingLatestCapsule } = candidatePredicate;
-    expect(sessionRecoveryCandidatePredicateSchema.safeParse(missingLatestCapsule).success).toBe(false);
+    for (const observedRefField of [
+      'workflow',
+      'session',
+      'active_lease',
+      'pending_queued_action',
+      'latest_turn',
+      'runtime_job',
+      'run_session',
+      'latest_capsule',
+    ] as const) {
+      const { [observedRefField]: _missingObservedRefField, ...missingObservedRefField } = candidatePredicate;
+      expect(sessionRecoveryCandidatePredicateSchema.safeParse(missingObservedRefField).success).toBe(false);
+    }
 
     for (const requiredField of [
       'codex_session_id',
@@ -239,21 +250,42 @@ describe('session operations contracts', () => {
   });
 
   it('requires explicit execution fencing for scavenge execute requests', () => {
+    const executeRequest = {
+      mode: 'execute',
+      reason: 'Recover sessions whose projected fencing still matches.',
+      operation_idempotency_key_prefix: 'scavenge-2026-06-10',
+      confirm_execute: true,
+      candidates: [candidatePredicate],
+    } as const;
+
+    const { confirm_execute: _missingConfirmExecute, ...missingConfirmExecute } = executeRequest;
+    expect(scavengeSessionOperationsRequestSchema.safeParse(missingConfirmExecute).success).toBe(false);
     expect(
       scavengeSessionOperationsRequestSchema.safeParse({
-        mode: 'execute',
+        ...executeRequest,
+        confirm_execute: false,
       }).success,
     ).toBe(false);
 
+    const { reason: _missingReason, ...missingReason } = executeRequest;
+    expect(scavengeSessionOperationsRequestSchema.safeParse(missingReason).success).toBe(false);
+
+    const {
+      operation_idempotency_key_prefix: _missingOperationIdempotencyKeyPrefix,
+      ...missingOperationIdempotencyKeyPrefix
+    } = executeRequest;
+    expect(scavengeSessionOperationsRequestSchema.safeParse(missingOperationIdempotencyKeyPrefix).success).toBe(false);
+
+    const { candidates: _missingCandidates, ...missingCandidates } = executeRequest;
+    expect(scavengeSessionOperationsRequestSchema.safeParse(missingCandidates).success).toBe(false);
     expect(
-      scavengeSessionOperationsRequestSchema.parse({
-        mode: 'execute',
-        reason: 'Recover sessions whose projected fencing still matches.',
-        operation_idempotency_key_prefix: 'scavenge-2026-06-10',
-        confirm_execute: true,
-        candidates: [candidatePredicate],
-      }),
-    ).toMatchObject({
+      scavengeSessionOperationsRequestSchema.safeParse({
+        ...executeRequest,
+        candidates: [],
+      }).success,
+    ).toBe(false);
+
+    expect(scavengeSessionOperationsRequestSchema.parse(executeRequest)).toMatchObject({
       mode: 'execute',
       confirm_execute: true,
       candidates: [{ operation_idempotency_key: 'recover:session-1:predicate-1' }],
