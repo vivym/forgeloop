@@ -9,6 +9,7 @@ import {
   planItemSessionHealthSeveritySchema,
   planItemSessionHealthStateSchema,
   recoverSessionRequestSchema,
+  recoverSessionResponseSchema,
   scavengeSessionOperationsRequestSchema,
   sessionOperationsFilterSchema,
   sessionOperationsHealthQuerySchema,
@@ -345,6 +346,16 @@ describe('session operations contracts', () => {
         candidate_predicate: candidatePredicate,
       }).success,
     ).toBe(false);
+
+    expect(
+      recoverSessionRequestSchema.safeParse({
+        operation: 'recover',
+        session_id: 'session-1',
+        reason: 'Recover the fenced session.',
+        operation_idempotency_key: 'recover:session-1:mismatch',
+        candidate_predicate: candidatePredicate,
+      }).success,
+    ).toBe(false);
   });
 
   it('coerces numeric session operations filter fields from strings', () => {
@@ -359,6 +370,28 @@ describe('session operations contracts', () => {
       max_lease_age_seconds: 3600,
       limit: 25,
     });
+
+    for (const looseValue of ['', null] as const) {
+      expect(
+        sessionOperationsFilterSchema.safeParse({
+          min_lease_age_seconds: looseValue,
+        }).success,
+      ).toBe(false);
+      expect(
+        sessionOperationsFilterSchema.safeParse({
+          max_lease_age_seconds: looseValue,
+        }).success,
+      ).toBe(false);
+      expect(
+        sessionOperationsFilterSchema.safeParse({
+          limit: looseValue,
+        }).success,
+      ).toBe(false);
+    }
+
+    expect(sessionOperationsFilterSchema.safeParse({ limit: '101' }).success).toBe(false);
+    expect(sessionOperationsFilterSchema.safeParse({ health_states: [] }).success).toBe(false);
+    expect(sessionOperationsFilterSchema.safeParse({ severities: [] }).success).toBe(false);
   });
 
   it('coerces numeric session operations health query fields from strings', () => {
@@ -373,6 +406,26 @@ describe('session operations contracts', () => {
       max_lease_age_seconds: 3600,
       limit: 25,
     });
+
+    for (const looseValue of ['', null] as const) {
+      expect(
+        sessionOperationsHealthQuerySchema.safeParse({
+          min_lease_age_seconds: looseValue,
+        }).success,
+      ).toBe(false);
+      expect(
+        sessionOperationsHealthQuerySchema.safeParse({
+          max_lease_age_seconds: looseValue,
+        }).success,
+      ).toBe(false);
+      expect(
+        sessionOperationsHealthQuerySchema.safeParse({
+          limit: looseValue,
+        }).success,
+      ).toBe(false);
+    }
+
+    expect(sessionOperationsHealthQuerySchema.safeParse({ limit: '101' }).success).toBe(false);
   });
 
   it('exposes recovery predicate summaries but rejects full predicates on recovery records', () => {
@@ -399,6 +452,31 @@ describe('session operations contracts', () => {
       sessionRecoveryRecordDtoSchema.safeParse({
         ...record,
         candidate_predicate: candidatePredicate,
+      }).success,
+    ).toBe(false);
+  });
+
+  it('rejects ambiguous rejected recover session responses with records', () => {
+    const recoveryRecord = {
+      id: 'recovery-record-1',
+      workflow_id: 'workflow-1',
+      session_id: 'session-1',
+      operation_type: 'recover_session',
+      status: 'rejected',
+      reason: 'Predicate no longer matched.',
+      operation_idempotency_key: 'recover:session-1:predicate-1',
+      predicate_summary: predicateSummary,
+      created_at: iso,
+    } as const;
+
+    expect(
+      recoverSessionResponseSchema.safeParse({
+        status: 'rejected',
+        operation_id: 'operation-1',
+        session_id: 'session-1',
+        operation_idempotency_key: 'recover:session-1:predicate-1',
+        rejection_reason: 'Predicate no longer matched.',
+        recovery_record: recoveryRecord,
       }).success,
     ).toBe(false);
   });

@@ -15,8 +15,10 @@ const nonEmpty = z.string().trim().min(1);
 const isoDateTimeSchema = z.string().datetime();
 const safeDigestSchema = z.string().regex(/^sha256:[a-f0-9]{64}$/);
 const nonNegativeIntegerSchema = z.number().int().nonnegative();
-const coerceNonNegativeIntegerSchema = z.coerce.number().int().nonnegative();
-const coercePositiveIntegerSchema = z.coerce.number().int().positive();
+const numericStringSchema = z.string().trim().min(1).regex(/^-?\d+(?:\.\d+)?$/);
+const numericInputSchema = z.union([z.number(), numericStringSchema]).pipe(z.coerce.number());
+const strictNonNegativeIntegerSchema = numericInputSchema.pipe(z.number().int().nonnegative());
+const strictPositiveLimitSchema = numericInputSchema.pipe(z.number().int().positive().max(100));
 
 export const planItemSessionHealthStateSchema = z.enum([
   'healthy',
@@ -192,14 +194,14 @@ export const sessionOperationsFilterSchema = z
     development_plan_item_id: nonEmpty.optional(),
     workflow_id: nonEmpty.optional(),
     session_id: nonEmpty.optional(),
-    health_states: z.array(planItemSessionHealthStateSchema).optional(),
-    severities: z.array(planItemSessionHealthSeveritySchema).optional(),
+    health_states: z.array(planItemSessionHealthStateSchema).min(1).optional(),
+    severities: z.array(planItemSessionHealthSeveritySchema).min(1).optional(),
     candidate_only: z.boolean().optional(),
     include_recovered: z.boolean().optional(),
     include_unrecoverable: z.boolean().optional(),
-    min_lease_age_seconds: coerceNonNegativeIntegerSchema.optional(),
-    max_lease_age_seconds: coerceNonNegativeIntegerSchema.optional(),
-    limit: coercePositiveIntegerSchema.optional(),
+    min_lease_age_seconds: strictNonNegativeIntegerSchema.optional(),
+    max_lease_age_seconds: strictNonNegativeIntegerSchema.optional(),
+    limit: strictPositiveLimitSchema.optional(),
   })
   .strict()
   .superRefine((filters, ctx) => {
@@ -232,9 +234,9 @@ export const sessionOperationsHealthQuerySchema = z
     candidate_only: coerceBooleanQuerySchema.optional(),
     include_recovered: coerceBooleanQuerySchema.optional(),
     include_unrecoverable: coerceBooleanQuerySchema.optional(),
-    min_lease_age_seconds: coerceNonNegativeIntegerSchema.optional(),
-    max_lease_age_seconds: coerceNonNegativeIntegerSchema.optional(),
-    limit: coercePositiveIntegerSchema.optional(),
+    min_lease_age_seconds: strictNonNegativeIntegerSchema.optional(),
+    max_lease_age_seconds: strictNonNegativeIntegerSchema.optional(),
+    limit: strictPositiveLimitSchema.optional(),
   })
   .strict()
   .superRefine((query, ctx) => {
@@ -260,7 +262,16 @@ export const recoverSessionRequestSchema = z
     operation_idempotency_key: nonEmpty,
     candidate_predicate: sessionRecoveryCandidatePredicateSchema,
   })
-  .strict();
+  .strict()
+  .superRefine((request, ctx) => {
+    if (request.operation_idempotency_key !== request.candidate_predicate.operation_idempotency_key) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['operation_idempotency_key'],
+        message: 'operation_idempotency_key must match candidate_predicate.operation_idempotency_key',
+      });
+    }
+  });
 export type RecoverSessionRequest = z.infer<typeof recoverSessionRequestSchema>;
 
 export const sessionOperationsHealthResponseSchema = z
@@ -339,6 +350,14 @@ export const recoverSessionResponseSchema = z
         code: 'custom',
         path: ['rejection_reason'],
         message: 'rejected recover session responses require rejection_reason',
+      });
+    }
+
+    if (response.status === 'rejected' && response.recovery_record !== undefined) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['recovery_record'],
+        message: 'rejected recover session responses must not include recovery_record',
       });
     }
   });
