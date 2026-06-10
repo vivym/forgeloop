@@ -201,11 +201,8 @@ export const operatorSessionHealthProjectionSchema = z
     workflow_id: nonEmpty.optional(),
     development_plan_id: nonEmpty.optional(),
     development_plan_item_id: nonEmpty.optional(),
-    session_id: nonEmpty.optional(),
-    health_state: planItemSessionHealthStateSchema.optional(),
     severity: planItemSessionHealthSeveritySchema.optional(),
     diagnostics: planItemSessionDiagnosticsSchema.optional(),
-    observed_at: isoDateTimeSchema.optional(),
   })
   .strict();
 export type OperatorSessionHealthProjection = z.infer<typeof operatorSessionHealthProjectionSchema>;
@@ -261,7 +258,6 @@ export const sessionOperationsHealthQuerySchema = z
     codex_session_id: nonEmpty.optional(),
     worker_id: nonEmpty.optional(),
     state: planItemSessionHealthStateSchema.optional(),
-    health_state: planItemSessionHealthStateSchema.optional(),
     severity: planItemSessionHealthSeveritySchema.optional(),
     recovered_state: z.enum(['recovered', 'unrecoverable']).optional(),
     candidate_only: coerceBooleanQuerySchema.optional(),
@@ -335,7 +331,6 @@ const predicateSummarySchema = z
 export const sessionRecoveryRecordDtoSchema = z
   .object({
     id: nonEmpty,
-    workflow_id: nonEmpty,
     codex_session_id: nonEmpty,
     operation: z.enum(['recover', 'scavenge', 'mark_unrecoverable']),
     result: z.enum(['applied', 'skipped', 'blocked']),
@@ -356,11 +351,6 @@ export const sessionRecoveryRecordDtoSchema = z
     predicate_summary: predicateSummarySchema,
     object_event_id: nonEmpty.optional(),
     created_at: isoDateTimeSchema.optional(),
-    session_id: nonEmpty.optional(),
-    operation_type: z.enum(['recover_session', 'scavenge_session_operations']).optional(),
-    status: z.enum(['accepted', 'succeeded', 'failed', 'rejected', 'skipped']).optional(),
-    completed_at: isoDateTimeSchema.optional(),
-    message: nonEmpty.optional(),
   })
   .strict();
 export type SessionRecoveryRecordDto = z.infer<typeof sessionRecoveryRecordDtoSchema>;

@@ -150,7 +150,6 @@ const operatorProjection = {
 
 const recoveryRecord = {
   id: 'recovery-record-1',
-  workflow_id: 'workflow-1',
   codex_session_id: 'session-1',
   operation: 'recover',
   result: 'applied',
@@ -559,6 +558,11 @@ describe('session operations contracts', () => {
     }
 
     expect(sessionOperationsHealthQuerySchema.safeParse({ limit: '101' }).success).toBe(false);
+    expect(
+      sessionOperationsHealthQuerySchema.safeParse({
+        health_state: 'blocked_stale_lease',
+      }).success,
+    ).toBe(false);
   });
 
   it('exposes recovery predicate summaries but rejects full predicates on recovery records', () => {
@@ -587,6 +591,91 @@ describe('session operations contracts', () => {
         candidate_predicate: candidatePredicate,
       }).success,
     ).toBe(false);
+  });
+
+  it('rejects stale recovery record dto aliases directly and when nested in responses', () => {
+    for (const staleField of [
+      ['session_id', 'session-1'],
+      ['operation_type', 'recover_session'],
+      ['status', 'succeeded'],
+      ['completed_at', iso],
+      ['message', 'Recovered stale lease.'],
+    ] as const) {
+      const staleRecord = {
+        ...recoveryRecord,
+        [staleField[0]]: staleField[1],
+      };
+
+      expect(sessionRecoveryRecordDtoSchema.safeParse(staleRecord).success).toBe(false);
+      expect(sessionOperationsAuditResponseSchema.safeParse({ items: [staleRecord] }).success).toBe(false);
+      expect(
+        scavengeSessionOperationsResponseSchema.safeParse({
+          mode: 'execute',
+          candidates: [operatorProjection],
+          results: [staleRecord],
+        }).success,
+      ).toBe(false);
+      expect(
+        recoverSessionResponseSchema.safeParse({
+          record: staleRecord,
+          before: operatorProjection,
+          after: {
+            ...operatorProjection,
+            state: 'recovered',
+            recovery_available: false,
+            operator_intervention_required: false,
+            projection_digest: digest('a'),
+            candidate_predicate: undefined,
+          },
+          replayed: false,
+        }).success,
+      ).toBe(false);
+    }
+  });
+
+  it('rejects stale operator projection aliases directly and when nested in responses', () => {
+    for (const staleField of [
+      ['session_id', 'session-1'],
+      ['health_state', 'blocked_stale_lease'],
+      ['observed_at', iso],
+    ] as const) {
+      const staleProjection = {
+        ...operatorProjection,
+        [staleField[0]]: staleField[1],
+      };
+
+      expect(operatorSessionHealthProjectionSchema.safeParse(staleProjection).success).toBe(false);
+      expect(
+        sessionOperationsHealthResponseSchema.safeParse({
+          items: [staleProjection],
+          filters: {
+            state: 'blocked_stale_lease',
+          },
+        }).success,
+      ).toBe(false);
+      expect(
+        scavengeSessionOperationsResponseSchema.safeParse({
+          mode: 'dry_run',
+          candidates: [staleProjection],
+          results: [],
+        }).success,
+      ).toBe(false);
+      expect(
+        recoverSessionResponseSchema.safeParse({
+          record: recoveryRecord,
+          before: staleProjection,
+          after: {
+            ...operatorProjection,
+            state: 'recovered',
+            recovery_available: false,
+            operator_intervention_required: false,
+            projection_digest: digest('a'),
+            candidate_predicate: undefined,
+          },
+          replayed: false,
+        }).success,
+      ).toBe(false);
+    }
   });
 
   it('accepts plan-aligned health, audit, scavenge, and recover responses', () => {
