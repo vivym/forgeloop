@@ -101,8 +101,12 @@ const candidatePredicate = {
     digest: digest('8'),
     sequence: 4,
     retention_pin: {
+      capsule_id: 'capsule-1',
+      capsule_digest: digest('8'),
       pin_state: 'pinned',
-      referenced_by: ['latest_turn:turn-1'],
+      pin_reasons: ['active_session_latest'],
+      referenced_by: [{ object_type: 'codex_session_turn', object_id: 'turn-1', relation: 'latest_turn' }],
+      checked_at: iso,
     },
     created_at: iso,
   }),
@@ -141,8 +145,12 @@ const operatorProjection = {
   lineage_risk: true,
   retention_pins: [
     {
+      capsule_id: 'capsule-1',
+      capsule_digest: digest('8'),
       pin_state: 'pinned',
-      referenced_by: ['latest_turn:turn-1'],
+      pin_reasons: ['active_session_latest'],
+      referenced_by: [{ object_type: 'codex_session_turn', object_id: 'turn-1', relation: 'latest_turn' }],
+      checked_at: iso,
     },
   ],
   candidate_predicate: candidatePredicate,
@@ -378,8 +386,12 @@ describe('session operations contracts', () => {
       normal_workflow_actions_available: false,
       retention_pins: [
         {
+          capsule_id: 'capsule-1',
+          capsule_digest: digest('8'),
           pin_state: 'pinned',
-          referenced_by: ['latest_turn:turn-1'],
+          pin_reasons: ['active_session_latest'],
+          referenced_by: [{ object_type: 'codex_session_turn', object_id: 'turn-1', relation: 'latest_turn' }],
+          checked_at: iso,
         },
       ],
       candidate_predicate: {
@@ -704,6 +716,36 @@ describe('session operations contracts', () => {
         lineage_risk: 'queued action is fenced to the stale turn.',
       }).success,
     ).toBe(false);
+  });
+
+  it('requires structured capsule retention pins', () => {
+    expect(
+      operatorSessionHealthProjectionSchema.safeParse({
+        ...operatorProjection,
+        retention_pins: [
+          {
+            pin_state: 'pinned',
+            referenced_by: ['latest_turn:turn-1'],
+          },
+        ],
+      }).success,
+    ).toBe(false);
+
+    expect(
+      operatorSessionHealthProjectionSchema.parse({
+        ...operatorProjection,
+        retention_pins: [
+          {
+            capsule_id: 'capsule-1',
+            capsule_digest: digest('8'),
+            pin_state: 'pinned',
+            pin_reasons: ['active_session_latest'],
+            referenced_by: [{ object_type: 'codex_session_turn', object_id: 'turn-1', relation: 'latest_turn' }],
+            checked_at: iso,
+          },
+        ],
+      }).retention_pins[0]?.referenced_by[0],
+    ).toEqual({ object_type: 'codex_session_turn', object_id: 'turn-1', relation: 'latest_turn' });
   });
 
   it('accepts plan-aligned health, audit, scavenge, and recover responses', () => {

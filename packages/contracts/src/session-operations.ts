@@ -62,8 +62,22 @@ export type ObservedRef<T> = ObservedPresent<T> | ObservedAbsent;
 
 export const capsuleRetentionPinSchema = z
   .object({
+    capsule_id: nonEmpty,
+    capsule_digest: safeDigestSchema,
     pin_state: z.enum(['pinned', 'not_cleanable', 'unpinned_candidate', 'unknown']),
-    referenced_by: z.array(nonEmpty),
+    pin_reasons: z.array(nonEmpty).default([]),
+    referenced_by: z
+      .array(
+        z
+          .object({
+            object_type: nonEmpty,
+            object_id: nonEmpty,
+            relation: nonEmpty,
+          })
+          .strict(),
+      )
+      .default([]),
+    checked_at: isoDateTimeSchema,
   })
   .strict();
 export type CapsuleRetentionPin = z.infer<typeof capsuleRetentionPinSchema>;
