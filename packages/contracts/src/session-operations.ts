@@ -1,6 +1,5 @@
 import { z } from 'zod';
 
-import { productHrefSchema } from './api.js';
 import {
   codexSessionLeaseStatusSchema,
   codexSessionRoleSchema,
@@ -162,28 +161,51 @@ export type SessionRecoveryCandidatePredicate = z.infer<typeof sessionRecoveryCa
 
 export const planItemSessionDiagnosticsSchema = z
   .object({
-    health_state: planItemSessionHealthStateSchema,
-    severity: planItemSessionHealthSeveritySchema,
+    plan_item_id: nonEmpty,
+    workflow_resolution: z.enum(['active_workflow', 'no_active_workflow', 'ambiguous_workflows']),
+    workflow_id: nonEmpty.optional(),
+    codex_session_id: nonEmpty.optional(),
+    state: planItemSessionHealthStateSchema.optional(),
+    severity: planItemSessionHealthSeveritySchema.optional(),
     summary: nonEmpty,
-    observed_at: isoDateTimeSchema,
-    blocker_codes: z.array(nonEmpty).default([]),
-    recommended_action: nonEmpty.optional(),
-    next_step_href: productHrefSchema.optional(),
+    operator_intervention_required: z.boolean(),
+    normal_workflow_actions_available: z.boolean(),
+    recovery_request_available: z.boolean(),
+    latest_checkpoint: z
+      .object({
+        checkpoint_id: nonEmpty,
+        created_at: isoDateTimeSchema,
+        projection_digest: safeDigestSchema.optional(),
+      })
+      .strict()
+      .optional(),
   })
   .strict();
 export type PlanItemSessionDiagnostics = z.infer<typeof planItemSessionDiagnosticsSchema>;
 
 export const operatorSessionHealthProjectionSchema = z
   .object({
-    workflow_id: nonEmpty,
-    development_plan_id: nonEmpty,
-    development_plan_item_id: nonEmpty,
-    session_id: nonEmpty.optional(),
-    health_state: planItemSessionHealthStateSchema,
-    severity: planItemSessionHealthSeveritySchema,
-    diagnostics: planItemSessionDiagnosticsSchema,
+    codex_session_id: nonEmpty,
+    state: planItemSessionHealthStateSchema,
+    summary: nonEmpty,
+    projection_digest: safeDigestSchema,
+    checked_at: isoDateTimeSchema,
+    recovery_available: z.boolean(),
+    recovery_operation_labels: z.array(z.enum(['recover', 'mark_unrecoverable'])).default([]),
+    operator_intervention_required: z.boolean(),
+    normal_workflow_actions_available: z.boolean(),
+    retention_risk: nonEmpty,
+    lineage_risk: nonEmpty,
+    retention_pins: z.array(capsuleRetentionPinSchema).default([]),
     candidate_predicate: sessionRecoveryCandidatePredicateSchema.optional(),
-    observed_at: isoDateTimeSchema,
+    workflow_id: nonEmpty.optional(),
+    development_plan_id: nonEmpty.optional(),
+    development_plan_item_id: nonEmpty.optional(),
+    session_id: nonEmpty.optional(),
+    health_state: planItemSessionHealthStateSchema.optional(),
+    severity: planItemSessionHealthSeveritySchema.optional(),
+    diagnostics: planItemSessionDiagnosticsSchema.optional(),
+    observed_at: isoDateTimeSchema.optional(),
   })
   .strict();
 export type OperatorSessionHealthProjection = z.infer<typeof operatorSessionHealthProjectionSchema>;
@@ -192,8 +214,14 @@ export const sessionOperationsFilterSchema = z
   .object({
     development_plan_id: nonEmpty.optional(),
     development_plan_item_id: nonEmpty.optional(),
+    project_id: nonEmpty.optional(),
     workflow_id: nonEmpty.optional(),
     session_id: nonEmpty.optional(),
+    codex_session_id: nonEmpty.optional(),
+    worker_id: nonEmpty.optional(),
+    state: planItemSessionHealthStateSchema.optional(),
+    severity: planItemSessionHealthSeveritySchema.optional(),
+    recovered_state: z.enum(['recovered', 'unrecoverable']).optional(),
     health_states: z.array(planItemSessionHealthStateSchema).min(1).optional(),
     severities: z.array(planItemSessionHealthSeveritySchema).min(1).optional(),
     candidate_only: z.boolean().optional(),
@@ -227,10 +255,15 @@ export const sessionOperationsHealthQuerySchema = z
   .object({
     development_plan_id: nonEmpty.optional(),
     development_plan_item_id: nonEmpty.optional(),
+    project_id: nonEmpty.optional(),
     workflow_id: nonEmpty.optional(),
     session_id: nonEmpty.optional(),
+    codex_session_id: nonEmpty.optional(),
+    worker_id: nonEmpty.optional(),
+    state: planItemSessionHealthStateSchema.optional(),
     health_state: planItemSessionHealthStateSchema.optional(),
     severity: planItemSessionHealthSeveritySchema.optional(),
+    recovered_state: z.enum(['recovered', 'unrecoverable']).optional(),
     candidate_only: coerceBooleanQuerySchema.optional(),
     include_recovered: coerceBooleanQuerySchema.optional(),
     include_unrecoverable: coerceBooleanQuerySchema.optional(),
@@ -257,7 +290,7 @@ export type SessionOperationsHealthQuery = z.infer<typeof sessionOperationsHealt
 export const recoverSessionRequestSchema = z
   .object({
     operation: z.enum(['recover', 'mark_unrecoverable']),
-    session_id: nonEmpty,
+    session_id: nonEmpty.optional(),
     reason: nonEmpty,
     operation_idempotency_key: nonEmpty,
     candidate_predicate: sessionRecoveryCandidatePredicateSchema,
@@ -276,40 +309,58 @@ export type RecoverSessionRequest = z.infer<typeof recoverSessionRequestSchema>;
 
 export const sessionOperationsHealthResponseSchema = z
   .object({
-    generated_at: isoDateTimeSchema,
+    generated_at: isoDateTimeSchema.optional(),
     filters: sessionOperationsFilterSchema.optional(),
     items: z.array(operatorSessionHealthProjectionSchema),
-    total_count: nonNegativeIntegerSchema,
+    total_count: nonNegativeIntegerSchema.optional(),
   })
   .strict();
 export type SessionOperationsHealthResponse = z.infer<typeof sessionOperationsHealthResponseSchema>;
+
+const predicateSummarySchema = z
+  .object({
+    operation_idempotency_key: nonEmpty,
+    projection_digest: safeDigestSchema,
+    expected_health_state: planItemSessionHealthStateSchema,
+    observed_at: isoDateTimeSchema,
+    workflow_state: z.enum(['present', 'absent']),
+    session_state: z.enum(['present', 'absent']),
+    active_lease_state: z.enum(['present', 'absent']),
+    pending_queued_action_state: z.enum(['present', 'absent']),
+    latest_turn_state: z.enum(['present', 'absent']),
+    runtime_job_state: z.enum(['present', 'absent']),
+    run_session_state: z.enum(['present', 'absent']),
+    latest_capsule_state: z.enum(['present', 'absent']),
+  })
+  .strict();
 
 export const sessionRecoveryRecordDtoSchema = z
   .object({
     id: nonEmpty,
     workflow_id: nonEmpty,
-    session_id: nonEmpty,
-    operation_type: z.enum(['recover_session', 'scavenge_session_operations']),
-    status: z.enum(['accepted', 'succeeded', 'failed', 'rejected', 'skipped']),
+    codex_session_id: nonEmpty,
+    operation: z.enum(['recover', 'scavenge', 'mark_unrecoverable']),
+    result: z.enum(['applied', 'skipped', 'blocked']),
+    result_code: nonEmpty,
     reason: nonEmpty,
+    actor_id: nonEmpty,
     operation_idempotency_key: nonEmpty,
-    predicate_summary: z
-      .object({
-        operation_idempotency_key: nonEmpty,
-        projection_digest: safeDigestSchema,
-        expected_health_state: planItemSessionHealthStateSchema,
-        observed_at: isoDateTimeSchema,
-        workflow_state: z.enum(['present', 'absent']),
-        session_state: z.enum(['present', 'absent']),
-        active_lease_state: z.enum(['present', 'absent']),
-        pending_queued_action_state: z.enum(['present', 'absent']),
-        latest_turn_state: z.enum(['present', 'absent']),
-        runtime_job_state: z.enum(['present', 'absent']),
-        run_session_state: z.enum(['present', 'absent']),
-        latest_capsule_state: z.enum(['present', 'absent']),
-      })
-      .strict(),
-    created_at: isoDateTimeSchema,
+    before_state: planItemSessionHealthStateSchema,
+    after_state: planItemSessionHealthStateSchema,
+    before_projection_digest: safeDigestSchema,
+    after_projection_digest: safeDigestSchema,
+    affected_lease_ids: z.array(nonEmpty).default([]),
+    affected_queued_action_ids: z.array(nonEmpty).default([]),
+    affected_turn_ids: z.array(nonEmpty).default([]),
+    affected_runtime_job_ids: z.array(nonEmpty).default([]),
+    affected_run_session_ids: z.array(nonEmpty).default([]),
+    affected_capsule_ids: z.array(nonEmpty).default([]),
+    predicate_summary: predicateSummarySchema,
+    object_event_id: nonEmpty.optional(),
+    created_at: isoDateTimeSchema.optional(),
+    session_id: nonEmpty.optional(),
+    operation_type: z.enum(['recover_session', 'scavenge_session_operations']).optional(),
+    status: z.enum(['accepted', 'succeeded', 'failed', 'rejected', 'skipped']).optional(),
     completed_at: isoDateTimeSchema.optional(),
     message: nonEmpty.optional(),
   })
@@ -318,25 +369,33 @@ export type SessionRecoveryRecordDto = z.infer<typeof sessionRecoveryRecordDtoSc
 
 export const sessionOperationsAuditResponseSchema = z
   .object({
-    generated_at: isoDateTimeSchema,
-    records: z.array(sessionRecoveryRecordDtoSchema),
+    items: z.array(sessionRecoveryRecordDtoSchema),
+    generated_at: isoDateTimeSchema.optional(),
     next_cursor: nonEmpty.optional(),
-    has_more: z.boolean(),
+    has_more: z.boolean().optional(),
   })
   .strict();
 export type SessionOperationsAuditResponse = z.infer<typeof sessionOperationsAuditResponseSchema>;
 
 export const recoverSessionResponseSchema = z
   .object({
-    status: z.enum(['accepted', 'already_completed', 'rejected']),
-    operation_id: nonEmpty,
-    session_id: nonEmpty,
-    operation_idempotency_key: nonEmpty,
+    record: sessionRecoveryRecordDtoSchema,
+    before: operatorSessionHealthProjectionSchema,
+    after: operatorSessionHealthProjectionSchema,
+    replayed: z.boolean(),
+    status: z.enum(['accepted', 'already_completed', 'rejected']).optional(),
+    operation_id: nonEmpty.optional(),
+    session_id: nonEmpty.optional(),
+    operation_idempotency_key: nonEmpty.optional(),
     recovery_record: sessionRecoveryRecordDtoSchema.optional(),
     rejection_reason: nonEmpty.optional(),
   })
   .strict()
   .superRefine((response, ctx) => {
+    if (response.status === undefined) {
+      return;
+    }
+
     if ((response.status === 'accepted' || response.status === 'already_completed') && response.recovery_record === undefined) {
       ctx.addIssue({
         code: 'custom',
@@ -363,14 +422,22 @@ export const recoverSessionResponseSchema = z
   });
 export type RecoverSessionResponse = z.infer<typeof recoverSessionResponseSchema>;
 
+export const scavengeSessionOperationsCandidateSchema = z
+  .object({
+    codex_session_id: nonEmpty,
+    candidate_predicate: sessionRecoveryCandidatePredicateSchema,
+  })
+  .strict();
+export type ScavengeSessionOperationsCandidate = z.infer<typeof scavengeSessionOperationsCandidateSchema>;
+
 export const scavengeSessionOperationsRequestSchema = z
   .object({
-    mode: z.enum(['plan', 'execute']).default('plan'),
+    mode: z.enum(['dry_run', 'execute']).default('dry_run'),
     filters: sessionOperationsFilterSchema.optional(),
     reason: nonEmpty.optional(),
     operation_idempotency_key_prefix: nonEmpty.optional(),
     confirm_execute: z.boolean().optional(),
-    candidates: z.array(sessionRecoveryCandidatePredicateSchema).optional(),
+    candidates: z.array(scavengeSessionOperationsCandidateSchema).min(1).optional(),
   })
   .strict()
   .superRefine((request, ctx) => {
@@ -414,13 +481,15 @@ export type ScavengeSessionOperationsRequest = z.infer<typeof scavengeSessionOpe
 
 export const scavengeSessionOperationsResponseSchema = z
   .object({
-    mode: z.enum(['plan', 'execute']),
-    generated_at: isoDateTimeSchema,
-    planned_candidates: z.array(operatorSessionHealthProjectionSchema).default([]),
-    recovery_records: z.array(sessionRecoveryRecordDtoSchema).default([]),
-    accepted_count: nonNegativeIntegerSchema,
-    rejected_count: nonNegativeIntegerSchema,
-    skipped_count: nonNegativeIntegerSchema,
+    mode: z.enum(['dry_run', 'execute']),
+    generated_at: isoDateTimeSchema.optional(),
+    candidates: z.array(operatorSessionHealthProjectionSchema).default([]),
+    results: z.array(sessionRecoveryRecordDtoSchema).default([]),
+    planned_candidates: z.array(operatorSessionHealthProjectionSchema).optional(),
+    recovery_records: z.array(sessionRecoveryRecordDtoSchema).optional(),
+    accepted_count: nonNegativeIntegerSchema.optional(),
+    rejected_count: nonNegativeIntegerSchema.optional(),
+    skipped_count: nonNegativeIntegerSchema.optional(),
   })
   .strict();
 export type ScavengeSessionOperationsResponse = z.infer<typeof scavengeSessionOperationsResponseSchema>;

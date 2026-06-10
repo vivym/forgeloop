@@ -11,7 +11,10 @@ import {
   recoverSessionRequestSchema,
   recoverSessionResponseSchema,
   scavengeSessionOperationsRequestSchema,
+  scavengeSessionOperationsResponseSchema,
+  sessionOperationsAuditResponseSchema,
   sessionOperationsFilterSchema,
+  sessionOperationsHealthResponseSchema,
   sessionOperationsHealthQuerySchema,
   sessionRecoveryCandidatePredicateSchema,
   sessionRecoveryRecordDtoSchema,
@@ -118,6 +121,50 @@ const predicateSummary = {
   runtime_job_state: 'present',
   run_session_state: 'present',
   latest_capsule_state: 'present',
+} as const;
+
+const operatorProjection = {
+  codex_session_id: 'session-1',
+  workflow_id: 'workflow-1',
+  development_plan_id: 'plan-1',
+  development_plan_item_id: 'plan-item-1',
+  state: 'blocked_stale_lease',
+  severity: 'blocked',
+  summary: 'The active session lease is stale.',
+  projection_digest: digest('0'),
+  checked_at: iso,
+  recovery_available: true,
+  recovery_operation_labels: ['recover', 'mark_unrecoverable'],
+  operator_intervention_required: true,
+  normal_workflow_actions_available: false,
+  retention_risk: 'latest capsule is pinned by the stale turn.',
+  lineage_risk: 'queued action is fenced to the stale turn.',
+  retention_pins: [
+    {
+      pin_state: 'pinned',
+      referenced_by: ['latest_turn:turn-1'],
+    },
+  ],
+  candidate_predicate: candidatePredicate,
+} as const;
+
+const recoveryRecord = {
+  id: 'recovery-record-1',
+  workflow_id: 'workflow-1',
+  codex_session_id: 'session-1',
+  operation: 'recover',
+  result: 'applied',
+  result_code: 'recovered_stale_lease',
+  reason: 'Recovered using the fenced predicate.',
+  actor_id: 'operator-1',
+  operation_idempotency_key: 'recover:session-1:predicate-1',
+  before_state: 'blocked_stale_lease',
+  after_state: 'recovered',
+  before_projection_digest: digest('0'),
+  after_projection_digest: digest('a'),
+  predicate_summary: predicateSummary,
+  object_event_id: 'object-event-1',
+  created_at: iso,
 } as const;
 
 describe('session operations contracts', () => {
@@ -256,7 +303,12 @@ describe('session operations contracts', () => {
       reason: 'Recover sessions whose projected fencing still matches.',
       operation_idempotency_key_prefix: 'scavenge-2026-06-10',
       confirm_execute: true,
-      candidates: [candidatePredicate],
+      candidates: [
+        {
+          codex_session_id: 'session-1',
+          candidate_predicate: candidatePredicate,
+        },
+      ],
     } as const;
 
     const { confirm_execute: _missingConfirmExecute, ...missingConfirmExecute } = executeRequest;
@@ -289,34 +341,94 @@ describe('session operations contracts', () => {
     expect(scavengeSessionOperationsRequestSchema.parse(executeRequest)).toMatchObject({
       mode: 'execute',
       confirm_execute: true,
-      candidates: [{ operation_idempotency_key: 'recover:session-1:predicate-1' }],
+      candidates: [
+        {
+          codex_session_id: 'session-1',
+          candidate_predicate: { operation_idempotency_key: 'recover:session-1:predicate-1' },
+        },
+      ],
     });
+  });
+
+  it('defaults scavenge requests to dry_run and rejects bare predicate candidates', () => {
+    expect(scavengeSessionOperationsRequestSchema.parse({})).toMatchObject({ mode: 'dry_run' });
+    expect(scavengeSessionOperationsRequestSchema.safeParse({ mode: 'plan' }).success).toBe(false);
+    expect(
+      scavengeSessionOperationsRequestSchema.safeParse({
+        mode: 'execute',
+        reason: 'Recover sessions whose projected fencing still matches.',
+        operation_idempotency_key_prefix: 'scavenge-2026-06-10',
+        confirm_execute: true,
+        candidates: [candidatePredicate],
+      }).success,
+    ).toBe(false);
   });
 
   it('accepts authorized operator projections with candidate predicates', () => {
     expect(
-      operatorSessionHealthProjectionSchema.parse({
-        workflow_id: 'workflow-1',
-        development_plan_id: 'plan-1',
-        development_plan_item_id: 'plan-item-1',
-        session_id: 'session-1',
-        health_state: 'blocked_stale_lease',
-        severity: 'blocked',
-        diagnostics: {
-          health_state: 'blocked_stale_lease',
-          severity: 'blocked',
-          summary: 'The active session lease is stale.',
-          observed_at: iso,
-          blocker_codes: ['stale_lease'],
-        },
-        candidate_predicate: candidatePredicate,
-        observed_at: iso,
-      }),
+      operatorSessionHealthProjectionSchema.parse(operatorProjection),
     ).toMatchObject({
+      codex_session_id: 'session-1',
+      state: 'blocked_stale_lease',
+      summary: 'The active session lease is stale.',
+      projection_digest: digest('0'),
+      checked_at: iso,
+      recovery_available: true,
+      recovery_operation_labels: ['recover', 'mark_unrecoverable'],
+      operator_intervention_required: true,
+      normal_workflow_actions_available: false,
+      retention_pins: [
+        {
+          pin_state: 'pinned',
+          referenced_by: ['latest_turn:turn-1'],
+        },
+      ],
       candidate_predicate: {
         operation_idempotency_key: 'recover:session-1:predicate-1',
       },
     });
+  });
+
+  it('exposes plan-aligned public diagnostics without raw recovery internals', () => {
+    const diagnostics = {
+      plan_item_id: 'plan-item-1',
+      workflow_resolution: 'active_workflow',
+      workflow_id: 'workflow-1',
+      codex_session_id: 'session-1',
+      state: 'blocked_stale_lease',
+      severity: 'blocked',
+      summary: 'The active session lease is stale.',
+      operator_intervention_required: true,
+      normal_workflow_actions_available: false,
+      recovery_request_available: true,
+      latest_checkpoint: {
+        checkpoint_id: 'checkpoint-1',
+        created_at: iso,
+        projection_digest: digest('0'),
+      },
+    } as const;
+
+    expect(planItemSessionDiagnosticsSchema.parse(diagnostics)).toMatchObject({
+      plan_item_id: 'plan-item-1',
+      workflow_resolution: 'active_workflow',
+      recovery_request_available: true,
+    });
+
+    for (const forbidden of [
+      ['candidate_predicate', candidatePredicate],
+      ['worker_session_digest', digest('9')],
+      ['operation_idempotency_key', 'recover:session-1:predicate-1'],
+      ['codex_thread_id', 'raw-thread-id'],
+      ['workspace_path', '/Users/viv/projs/forgeloop'],
+      ['secret_material', 'token'],
+    ] as const) {
+      expect(
+        planItemSessionDiagnosticsSchema.safeParse({
+          ...diagnostics,
+          [forbidden[0]]: forbidden[1],
+        }).success,
+      ).toBe(false);
+    }
   });
 
   it('requires recover session operation and candidate predicate fencing', () => {
@@ -324,7 +436,6 @@ describe('session operations contracts', () => {
       expect(
         recoverSessionRequestSchema.parse({
           operation,
-          session_id: 'session-1',
           reason: 'Recover the fenced session.',
           operation_idempotency_key: 'recover:session-1:predicate-1',
           candidate_predicate: candidatePredicate,
@@ -340,7 +451,6 @@ describe('session operations contracts', () => {
 
     expect(
       recoverSessionRequestSchema.safeParse({
-        session_id: 'session-1',
         reason: 'Recover the fenced session.',
         operation_idempotency_key: 'recover:session-1:predicate-1',
         candidate_predicate: candidatePredicate,
@@ -350,7 +460,6 @@ describe('session operations contracts', () => {
     expect(
       recoverSessionRequestSchema.safeParse({
         operation: 'recover',
-        session_id: 'session-1',
         reason: 'Recover the fenced session.',
         operation_idempotency_key: 'recover:session-1:mismatch',
         candidate_predicate: candidatePredicate,
@@ -361,11 +470,23 @@ describe('session operations contracts', () => {
   it('coerces numeric session operations filter fields from strings', () => {
     expect(
       sessionOperationsFilterSchema.parse({
+        state: 'blocked_stale_lease',
+        severity: 'blocked',
+        project_id: 'project-1',
+        codex_session_id: 'session-1',
+        worker_id: 'worker-1',
+        recovered_state: 'recovered',
         min_lease_age_seconds: '60',
         max_lease_age_seconds: '3600',
         limit: '25',
       }),
     ).toMatchObject({
+      state: 'blocked_stale_lease',
+      severity: 'blocked',
+      project_id: 'project-1',
+      codex_session_id: 'session-1',
+      worker_id: 'worker-1',
+      recovered_state: 'recovered',
       min_lease_age_seconds: 60,
       max_lease_age_seconds: 3600,
       limit: 25,
@@ -397,11 +518,23 @@ describe('session operations contracts', () => {
   it('coerces numeric session operations health query fields from strings', () => {
     expect(
       sessionOperationsHealthQuerySchema.parse({
+        state: 'blocked_stale_lease',
+        severity: 'blocked',
+        project_id: 'project-1',
+        codex_session_id: 'session-1',
+        worker_id: 'worker-1',
+        recovered_state: 'recovered',
         min_lease_age_seconds: '60',
         max_lease_age_seconds: '3600',
         limit: '25',
       }),
     ).toMatchObject({
+      state: 'blocked_stale_lease',
+      severity: 'blocked',
+      project_id: 'project-1',
+      codex_session_id: 'session-1',
+      worker_id: 'worker-1',
+      recovered_state: 'recovered',
       min_lease_age_seconds: 60,
       max_lease_age_seconds: 3600,
       limit: 25,
@@ -429,19 +562,19 @@ describe('session operations contracts', () => {
   });
 
   it('exposes recovery predicate summaries but rejects full predicates on recovery records', () => {
-    const record = {
-      id: 'recovery-record-1',
-      workflow_id: 'workflow-1',
-      session_id: 'session-1',
-      operation_type: 'recover_session',
-      status: 'succeeded',
-      reason: 'Recovered using the fenced predicate.',
-      operation_idempotency_key: 'recover:session-1:predicate-1',
-      predicate_summary: predicateSummary,
-      created_at: iso,
-    } as const;
-
-    expect(sessionRecoveryRecordDtoSchema.parse(record)).toMatchObject({
+    expect(sessionRecoveryRecordDtoSchema.parse(recoveryRecord)).toMatchObject({
+      operation: 'recover',
+      result: 'applied',
+      result_code: 'recovered_stale_lease',
+      actor_id: 'operator-1',
+      before_state: 'blocked_stale_lease',
+      after_state: 'recovered',
+      affected_lease_ids: [],
+      affected_queued_action_ids: [],
+      affected_turn_ids: [],
+      affected_runtime_job_ids: [],
+      affected_run_session_ids: [],
+      affected_capsule_ids: [],
       predicate_summary: {
         operation_idempotency_key: 'recover:session-1:predicate-1',
         projection_digest: digest('0'),
@@ -450,44 +583,75 @@ describe('session operations contracts', () => {
 
     expect(
       sessionRecoveryRecordDtoSchema.safeParse({
-        ...record,
+        ...recoveryRecord,
         candidate_predicate: candidatePredicate,
       }).success,
     ).toBe(false);
   });
 
-  it('rejects ambiguous rejected recover session responses with records', () => {
-    const recoveryRecord = {
-      id: 'recovery-record-1',
-      workflow_id: 'workflow-1',
-      session_id: 'session-1',
-      operation_type: 'recover_session',
-      status: 'rejected',
-      reason: 'Predicate no longer matched.',
-      operation_idempotency_key: 'recover:session-1:predicate-1',
-      predicate_summary: predicateSummary,
-      created_at: iso,
-    } as const;
+  it('accepts plan-aligned health, audit, scavenge, and recover responses', () => {
+    expect(
+      sessionOperationsHealthResponseSchema.parse({
+        items: [operatorProjection],
+        filters: {
+          state: 'blocked_stale_lease',
+          codex_session_id: 'session-1',
+          limit: '25',
+        },
+      }),
+    ).toMatchObject({
+      items: [{ codex_session_id: 'session-1', state: 'blocked_stale_lease' }],
+      filters: { limit: 25 },
+    });
+
+    expect(sessionOperationsAuditResponseSchema.parse({ items: [recoveryRecord] })).toMatchObject({
+      items: [{ operation: 'recover', result: 'applied' }],
+    });
+
+    expect(sessionOperationsAuditResponseSchema.safeParse({ records: [recoveryRecord] }).success).toBe(false);
 
     expect(
-      recoverSessionResponseSchema.safeParse({
-        status: 'rejected',
-        operation_id: 'operation-1',
-        session_id: 'session-1',
-        operation_idempotency_key: 'recover:session-1:predicate-1',
-        rejection_reason: 'Predicate no longer matched.',
-        recovery_record: recoveryRecord,
-      }).success,
-    ).toBe(false);
+      scavengeSessionOperationsResponseSchema.parse({
+        mode: 'dry_run',
+        candidates: [operatorProjection],
+      }),
+    ).toMatchObject({
+      mode: 'dry_run',
+      candidates: [{ codex_session_id: 'session-1' }],
+      results: [],
+    });
+
+    expect(
+      recoverSessionResponseSchema.parse({
+        record: recoveryRecord,
+        before: operatorProjection,
+        after: {
+          ...operatorProjection,
+          state: 'recovered',
+          recovery_available: false,
+          operator_intervention_required: false,
+          projection_digest: digest('a'),
+          candidate_predicate: undefined,
+        },
+        replayed: false,
+      }),
+    ).toMatchObject({
+      record: { operation: 'recover', result: 'applied' },
+      before: { state: 'blocked_stale_lease' },
+      after: { state: 'recovered' },
+      replayed: false,
+    });
   });
 
   it('keeps public diagnostics free of operator-only recovery material', () => {
     const diagnostics = {
-      health_state: 'blocked_stale_lease',
-      severity: 'blocked',
+      plan_item_id: 'plan-item-1',
+      workflow_resolution: 'active_workflow',
+      state: 'blocked_stale_lease',
       summary: 'The active session lease is stale.',
-      observed_at: iso,
-      blocker_codes: ['stale_lease'],
+      operator_intervention_required: true,
+      normal_workflow_actions_available: false,
+      recovery_request_available: true,
     } as const;
 
     expect(planItemSessionDiagnosticsSchema.parse(diagnostics)).toEqual(diagnostics);
