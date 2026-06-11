@@ -22,8 +22,11 @@ import type {
 import { DomainError, type IsoDateTime, type ObjectEvent, type RunSession } from './types.js';
 
 type ObservedRef<T> = { checked: true; state: 'present'; value: T } | { checked: true; state: 'absent' };
+type PlanItemSessionHealthCore = Omit<OperatorSessionHealthProjection, 'codex_session_id'> & {
+  codex_session_id?: string;
+};
 
-export type PlanItemSessionHealth = OperatorSessionHealthProjection & {
+export type PlanItemSessionHealth = PlanItemSessionHealthCore & {
   diagnostics: PlanItemSessionDiagnostics;
 };
 
@@ -130,6 +133,8 @@ export const sessionRecoveryProjectionDigest = (value: unknown): string => codex
 export const capsuleDigestPrefix = (digest: string): string => digest.slice(0, 'sha256:'.length + 12);
 
 export const buildSessionHealthProjection = (input: BuildSessionHealthProjectionInput): PlanItemSessionHealth => {
+  const planItemId = resolvePlanItemId(input);
+  const codexSessionId = input.session?.id ?? input.workflow?.active_codex_session_id;
   const state = deriveState(input);
   const severity = severityForState(state);
   const reasonCode = reasonCodeForState(state, input);
@@ -141,8 +146,8 @@ export const buildSessionHealthProjection = (input: BuildSessionHealthProjection
   const recoveryAvailable = hasActiveWorkflowResolution && recoveryStates.has(state);
   const operatorInterventionRequired = !hasActiveWorkflowResolution || (state !== 'healthy' && state !== 'recovered');
   const normalWorkflowActionsAvailable = hasActiveWorkflowResolution && (state === 'healthy' || state === 'attention_needed');
-  const base = optionalObject<OperatorSessionHealthProjection>({
-    codex_session_id: input.session?.id ?? input.workflow?.active_codex_session_id ?? 'unknown-codex-session',
+  const base = optionalObject<PlanItemSessionHealthCore>({
+    ...(codexSessionId === undefined ? {} : { codex_session_id: codexSessionId }),
     project_id: input.project_id,
     organization_id: input.organization_id,
     state,
@@ -167,6 +172,7 @@ export const buildSessionHealthProjection = (input: BuildSessionHealthProjection
     schema_version: 'session_health_projection.v1',
     ...base,
     projection_digest: undefined,
+    observed_facts: buildObservedFactsSnapshot(input, retentionPins),
   });
   const withDigest = { ...base, projection_digest: projectionDigest };
   const candidate_predicate = recoveryAvailable
@@ -176,7 +182,7 @@ export const buildSessionHealthProjection = (input: BuildSessionHealthProjection
     ...withDigest,
     ...(candidate_predicate === undefined ? {} : { candidate_predicate }),
     diagnostics: {
-      plan_item_id: input.plan_item_id ?? input.workflow?.development_plan_item_id ?? 'unknown-plan-item',
+      plan_item_id: planItemId,
       workflow_resolution: workflowResolution,
       summary: withDigest.summary,
       operator_intervention_required: operatorInterventionRequired,
@@ -197,15 +203,20 @@ export const buildSessionRecoveryCandidatePredicate = (
   state: PlanItemSessionHealthState,
   projectionDigest: string,
 ): SessionRecoveryCandidatePredicate => {
-  const codexSessionId = input.session?.id ?? input.workflow?.active_codex_session_id ?? 'unknown-codex-session';
-  const workflowId = input.workflow?.id ?? input.session?.owner_id ?? 'unknown-workflow';
+  const codexSessionId = input.session?.id ?? input.workflow?.active_codex_session_id;
+  const workflowId = input.workflow?.id ?? input.session?.owner_id;
+  if (codexSessionId === undefined || workflowId === undefined) {
+    throw new DomainError(
+      'session_operations_stale_candidate',
+      'session_operations_stale_candidate: recovery candidate requires concrete workflow and Codex session identity',
+    );
+  }
   return {
     codex_session_id: codexSessionId,
     workflow_id: workflowId,
     expected_health_state: state,
     operation_idempotency_key: codexCanonicalDigest({
-      kind: 'session_recovery_operation',
-      operation: 'recover',
+      predicate_kind: 'session_recovery_candidate',
       codex_session_id: codexSessionId,
       workflow_id: workflowId,
       projection_digest: projectionDigest,
@@ -376,10 +387,10 @@ export const buildCapsuleRetentionPins = (input: BuildCapsuleRetentionPinsInput)
 
 export const redactPlanItemSessionDiagnostics = (projection: PlanItemSessionHealth): PlanItemSessionDiagnostics =>
   optionalObject({
-    plan_item_id: projection.development_plan_item_id ?? projection.diagnostics?.plan_item_id ?? 'unknown-plan-item',
+    plan_item_id: projection.development_plan_item_id ?? projection.diagnostics?.plan_item_id ?? requirePlanItemId(projection),
     workflow_resolution: projection.diagnostics?.workflow_resolution ?? (projection.workflow_id === undefined ? 'no_active_workflow' : 'active_workflow'),
     workflow_id: projection.workflow_id,
-    codex_session_id: projection.codex_session_id === 'unknown-codex-session' ? undefined : projection.codex_session_id,
+    codex_session_id: projection.codex_session_id,
     state: projection.state,
     severity: projection.severity,
     summary: projection.summary,
@@ -391,7 +402,7 @@ export const redactPlanItemSessionDiagnostics = (projection: PlanItemSessionHeal
 
 export const redactOperatorSessionHealthProjection = (projection: PlanItemSessionHealth): OperatorSessionHealthProjection =>
   optionalObject({
-    codex_session_id: projection.codex_session_id,
+    codex_session_id: requireCodexSessionId(projection),
     project_id: projection.project_id,
     organization_id: projection.organization_id,
     state: projection.state,
@@ -445,7 +456,7 @@ export const recoveryRequestMatchesExistingRecord = (
     existing.operation === incoming.operation &&
     existing.result === (incoming.target_result ?? 'applied') &&
     existing.after_state === (incoming.target_after_state ?? targetAfterStateForOperation(incoming.operation)) &&
-    predicateIdentityDigest(existing.predicate_summary) === predicateIdentityDigest(incoming.candidate_predicate)
+    predicateSummariesMatch(existing.predicate_summary, incoming.candidate_predicate)
   );
 };
 
@@ -546,7 +557,7 @@ const summaryForState = (state: PlanItemSessionHealthState, input: BuildSessionH
     case 'healthy':
       return 'The active Codex session is aligned with its workflow and latest capsule.';
     case 'attention_needed':
-      return input.stale_projection_reason ?? 'The session health projection needs operator attention.';
+      return 'The session health projection needs operator attention.';
     case 'blocked_lineage_conflict':
       return 'The active workflow and Codex session lineage do not match.';
     case 'blocked_stale_lease':
@@ -638,11 +649,167 @@ const digestFromRuntimeMetadata = (runSession: RunSession, key: 'input_capsule_d
   return typeof value === 'string' ? value : undefined;
 };
 
-const predicateIdentityDigest = (predicate: SessionRecoveryRecord['predicate_summary']): string => {
+const buildObservedFactsSnapshot = (
+  input: BuildSessionHealthProjectionInput,
+  retentionPins: readonly CapsuleRetentionPin[],
+): Record<string, unknown> => ({
+  workflow: observed(input.workflow, (workflow) =>
+    optionalObject({
+      id: workflow.id,
+      development_plan_id: workflow.development_plan_id,
+      development_plan_item_id: workflow.development_plan_item_id,
+      status: workflow.status,
+      active_codex_session_id: workflow.active_codex_session_id,
+      updated_at: workflow.updated_at,
+    }),
+  ),
+  session: observed(input.session, (session) =>
+    optionalObject({
+      id: session.id,
+      owner_id: session.owner_id,
+      status: session.status,
+      role: session.role,
+      latest_capsule_id: session.latest_capsule_id,
+      latest_capsule_digest: session.latest_capsule_digest,
+      latest_turn_id: session.latest_turn_id,
+      active_lease_id: session.active_lease_id,
+      updated_at: session.updated_at,
+    }),
+  ),
+  active_lease: observed(input.active_lease, (lease) =>
+    optionalObject({
+      id: lease.id,
+      codex_session_id: lease.codex_session_id,
+      lease_epoch: lease.lease_epoch,
+      worker_id: lease.worker_id,
+      worker_session_digest: lease.worker_session_digest,
+      status: lease.status,
+      heartbeat_at: lease.heartbeat_at,
+      expires_at: lease.expires_at,
+      updated_at: lease.updated_at,
+    }),
+  ),
+  pending_queued_action: observed(input.pending_queued_action, (action) =>
+    optionalObject({
+      id: action.id,
+      workflow_id: action.workflow_id,
+      codex_session_id: action.codex_session_id,
+      kind: action.kind,
+      status: action.status,
+      expected_input_capsule_digest: action.expected_input_capsule_digest,
+      idempotency_key: action.idempotency_key,
+      codex_session_turn_id: action.codex_session_turn_id,
+      updated_at: action.updated_at,
+    }),
+  ),
+  latest_turn: observed(input.latest_turn, (turn) =>
+    optionalObject({
+      id: turn.id,
+      codex_session_id: turn.codex_session_id,
+      workflow_id: turn.workflow_id,
+      status: turn.status,
+      input_capsule_id: turn.input_capsule_id,
+      input_capsule_digest: turn.input_capsule_digest,
+      output_capsule_id: turn.output_capsule_id,
+      output_capsule_digest: turn.output_capsule_digest,
+      runtime_job_id: turn.runtime_job_id,
+      updated_at: turn.updated_at,
+    }),
+  ),
+  runtime_job: observed(input.runtime_job, (job) =>
+    optionalObject({
+      id: job.id,
+      session_id: job.session_id,
+      status: job.status,
+      worker_session_digest: job.worker_session_digest,
+      updated_at: job.updated_at,
+    }),
+  ),
+  run_session: observed(input.run_session, (runSession) =>
+    optionalObject({
+      id: runSession.id,
+      workflow_id: runSession.workflow_id,
+      codex_session_id: runSession.codex_session_id,
+      codex_session_turn_id: runSession.codex_session_turn_id,
+      status: runSession.status,
+      updated_at: runSession.updated_at,
+      input_capsule_digest: digestFromRuntimeMetadata(runSession, 'input_capsule_digest'),
+      output_capsule_digest: digestFromRuntimeMetadata(runSession, 'output_capsule_digest'),
+    }),
+  ),
+  latest_capsule: observed(input.latest_capsule, (capsule) =>
+    optionalObject({
+      id: capsule.id,
+      codex_session_id: capsule.codex_session_id,
+      created_from_turn_id: capsule.created_from_turn_id,
+      sequence: capsule.sequence,
+      digest: capsule.digest,
+      manifest_digest: capsule.manifest_digest,
+      thread_state_digest: capsule.thread_state_digest,
+      memory_state_digest: capsule.memory_state_digest,
+      environment_manifest_digest: capsule.environment_manifest_digest,
+      codex_thread_id_digest: capsule.codex_thread_id_digest,
+      created_at: capsule.created_at,
+    }),
+  ),
+  retention_pins: retentionPins,
+});
+
+const predicateSummary = (predicate: SessionRecoveryRecord['predicate_summary']): SessionRecoveryRecordDto['predicate_summary'] => {
   if ('workflow' in predicate) {
-    return codexCanonicalDigest(predicate);
+    return {
+      operation_idempotency_key: predicate.operation_idempotency_key,
+      projection_digest: predicate.projection_digest,
+      expected_health_state: predicate.expected_health_state,
+      observed_at: predicate.observed_at,
+      workflow_state: predicate.workflow.state,
+      session_state: predicate.session.state,
+      active_lease_state: predicate.active_lease.state,
+      pending_queued_action_state: predicate.pending_queued_action.state,
+      latest_turn_state: predicate.latest_turn.state,
+      runtime_job_state: predicate.runtime_job.state,
+      run_session_state: predicate.run_session.state,
+      latest_capsule_state: predicate.latest_capsule.state,
+    };
   }
-  return codexCanonicalDigest(predicate);
+  return predicate;
+};
+
+const predicateSummariesMatch = (
+  existing: SessionRecoveryRecord['predicate_summary'],
+  incoming: SessionRecoveryCandidatePredicate,
+): boolean => codexCanonicalDigest(predicateSummary(existing)) === codexCanonicalDigest(predicateSummary(incoming));
+
+const resolvePlanItemId = (input: Pick<BuildSessionHealthProjectionInput, 'plan_item_id' | 'workflow'>): string => {
+  const planItemId = input.plan_item_id ?? input.workflow?.development_plan_item_id;
+  if (planItemId === undefined) {
+    throw new DomainError(
+      'session_operations_no_active_workflow',
+      'session_operations_no_active_workflow: session health projection requires a concrete Plan Item identity',
+    );
+  }
+  return planItemId;
+};
+
+const requirePlanItemId = (projection: Pick<PlanItemSessionHealth, 'development_plan_item_id' | 'diagnostics'>): string => {
+  const planItemId = projection.development_plan_item_id ?? projection.diagnostics?.plan_item_id;
+  if (planItemId === undefined) {
+    throw new DomainError(
+      'session_operations_no_active_workflow',
+      'session_operations_no_active_workflow: Plan Item diagnostics require a concrete Plan Item identity',
+    );
+  }
+  return planItemId;
+};
+
+const requireCodexSessionId = (projection: Pick<PlanItemSessionHealth, 'codex_session_id'>): string => {
+  if (projection.codex_session_id === undefined) {
+    throw new DomainError(
+      'session_operations_no_active_workflow',
+      'session_operations_no_active_workflow: operator session health requires a concrete Codex session identity',
+    );
+  }
+  return projection.codex_session_id;
 };
 
 const targetAfterStateForOperation = (operation: RecoverSessionRequest['operation']): PlanItemSessionHealthState =>

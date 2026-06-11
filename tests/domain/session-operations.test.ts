@@ -227,6 +227,23 @@ describe('session operations domain helpers', () => {
     expect(projection.candidate_predicate).toBeUndefined();
   });
 
+  it('does not echo raw stale projection reasons into public or operator summaries', () => {
+    const projection = buildSessionHealthProjection(
+      baseInput({
+        stale_projection_reason: 'raw /Users/viv/projs/forgeloop secret=abc123 token',
+      }),
+    );
+    const diagnostics = redactPlanItemSessionDiagnostics(projection);
+    const operator = redactOperatorSessionHealthProjection(projection);
+
+    expect(diagnostics.summary).toBe('The session health projection needs operator attention.');
+    expect(operator.summary).toBe('The session health projection needs operator attention.');
+    expect(collectText(diagnostics)).not.toContain('/Users/');
+    expect(collectText(diagnostics)).not.toContain('secret=abc123');
+    expect(collectText(operator)).not.toContain('/Users/');
+    expect(collectText(operator)).not.toContain('secret=abc123');
+  });
+
   it('missing active session or workflow/session mismatch projects blocked_lineage_conflict fail-closed', () => {
     for (const input of [
       baseInput({ session: undefined, latest_capsule: undefined, active_lease: undefined }),
@@ -249,6 +266,7 @@ describe('session operations domain helpers', () => {
   it('missing workflow with present session does not throw and fail-closes lineage', () => {
     const projection = buildSessionHealthProjection(
       baseInput({
+        plan_item_id: 'plan-item-1',
         workflow: undefined,
         workflow_resolution: 'no_active_workflow',
       }),
@@ -291,6 +309,7 @@ describe('session operations domain helpers', () => {
   it('preserves explicit no active workflow resolution in public diagnostics', () => {
     const projection = buildSessionHealthProjection(
       baseInput({
+        plan_item_id: 'plan-item-1',
         workflow: undefined,
         session: undefined,
         latest_capsule: undefined,
@@ -308,6 +327,21 @@ describe('session operations domain helpers', () => {
     });
     expect(diagnostics).not.toHaveProperty('workflow_id');
     expect(diagnostics).not.toHaveProperty('codex_session_id');
+    expect(collectText(diagnostics)).not.toContain('unknown-');
+  });
+
+  it('rejects missing workflow projections that lack concrete Plan Item identity', () => {
+    expect(() =>
+      buildSessionHealthProjection(
+        baseInput({
+          workflow: undefined,
+          session: undefined,
+          latest_capsule: undefined,
+          active_lease: undefined,
+          workflow_resolution: 'no_active_workflow',
+        }),
+      ),
+    ).toThrow(/session_operations_no_active_workflow/);
   });
 
   it('missing or mismatched latest capsule projects blocked_missing_capsule', () => {
@@ -485,6 +519,54 @@ describe('session operations domain helpers', () => {
     expect(projection.retention_risk).toBe(true);
   });
 
+  it('retention pins keep recovery-record references when affected capsule digest is known locally', () => {
+    const pins = buildCapsuleRetentionPins({
+      checked_at: checkedAt,
+      capsules: [capsule({ id: 'capsule-1', digest: digest('b') })],
+      recovery_records: [
+        {
+          id: 'recovery-1',
+          codex_session_id: 'session-1',
+          operation: 'recover',
+          result: 'applied',
+          result_code: 'recovered',
+          reason: 'Recovered stale lease.',
+          actor_id: 'operator-1',
+          operation_idempotency_key: 'recover-key',
+          before_state: 'blocked_stale_lease',
+          after_state: 'recovered',
+          before_projection_digest: digest('0'),
+          after_projection_digest: digest('1'),
+          affected_capsule_ids: ['capsule-1'],
+          predicate_summary: {
+            operation_idempotency_key: 'recover-key',
+            projection_digest: digest('0'),
+            expected_health_state: 'blocked_stale_lease',
+            observed_at: checkedAt,
+            workflow_state: 'present',
+            session_state: 'present',
+            active_lease_state: 'present',
+            pending_queued_action_state: 'absent',
+            latest_turn_state: 'absent',
+            runtime_job_state: 'absent',
+            run_session_state: 'absent',
+            latest_capsule_state: 'present',
+          },
+        },
+      ],
+    });
+
+    expect(pins).toEqual([
+      expect.objectContaining({
+        capsule_id: 'capsule-1',
+        capsule_digest: digest('b'),
+        pin_state: 'not_cleanable',
+        pin_reasons: ['recovery_record'],
+        referenced_by: [{ object_type: 'session_recovery_record', object_id: 'recovery-1', relation: 'recovery_record' }],
+      }),
+    ]);
+  });
+
   it('redactPlanItemSessionDiagnostics returns public DTO without raw internals', () => {
     const projection = buildSessionHealthProjection(
       baseInput({
@@ -536,6 +618,43 @@ describe('session operations domain helpers', () => {
     expect(sessionRecoveryProjectionDigest({ a: 1 })).not.toBe(sessionRecoveryProjectionDigest({ a: 2 }));
   });
 
+  it('projection digest and predicate key fence mutable observed recovery facts', () => {
+    const initial = buildSessionHealthProjection(
+      baseInput({
+        active_lease: lease({ expires_at: checkedAt, heartbeat_at: earlier }),
+      }),
+    );
+    const changedLease = buildSessionHealthProjection(
+      baseInput({
+        active_lease: lease({ expires_at: checkedAt, heartbeat_at: '2026-06-10T11:59:00.000Z' }),
+      }),
+    );
+    const queued = buildSessionHealthProjection(
+      baseInput({
+        active_lease: undefined,
+        pending_queued_action: queuedAction({ idempotency_key: digest('7') }),
+      }),
+    );
+    const changedQueued = buildSessionHealthProjection(
+      baseInput({
+        active_lease: undefined,
+        pending_queued_action: queuedAction({ idempotency_key: digest('8') }),
+      }),
+    );
+
+    expect(changedLease.projection_digest).not.toBe(initial.projection_digest);
+    expect(changedLease.candidate_predicate?.operation_idempotency_key).not.toBe(
+      initial.candidate_predicate?.operation_idempotency_key,
+    );
+    expect(changedQueued.projection_digest).not.toBe(queued.projection_digest);
+    expect(changedQueued.candidate_predicate?.operation_idempotency_key).not.toBe(
+      queued.candidate_predicate?.operation_idempotency_key,
+    );
+    expect(() => assertRecoveryPredicateStillMatches(changedLease, initial.candidate_predicate!)).toThrow(
+      /session_operations_stale_candidate/,
+    );
+  });
+
   it('recoveryRequestMatchesExistingRecord rejects idempotency collisions with different operation targets', () => {
     const projection = buildSessionHealthProjection(
       baseInput({
@@ -583,6 +702,65 @@ describe('session operations domain helpers', () => {
     expect(() =>
       assertRecoveryIdempotencyNotConflicting({ ...existing, after_state: 'unrecoverable' }, incoming),
     ).toThrow(/session_operations_idempotency_conflict/);
+  });
+
+  it('replays idempotent recovery records stored with DTO-shaped predicate summaries', () => {
+    const projection = buildSessionHealthProjection(
+      baseInput({
+        active_lease: lease({ expires_at: checkedAt }),
+      }),
+    );
+    const predicate = projection.candidate_predicate!;
+    const incoming = {
+      operation: 'recover' as const,
+      reason: 'Recover stale lease.',
+      operation_idempotency_key: predicate.operation_idempotency_key,
+      candidate_predicate: predicate,
+      target_after_state: 'recovered' as const,
+      target_result: 'applied' as const,
+    };
+    const existing: SessionRecoveryRecord = {
+      id: 'record-1',
+      codex_session_id: 'session-1',
+      operation: 'recover',
+      result: 'applied',
+      result_code: 'recovered',
+      reason: 'Recover stale lease.',
+      actor_id: 'operator-1',
+      operation_idempotency_key: incoming.operation_idempotency_key,
+      before_state: 'blocked_stale_lease',
+      after_state: 'recovered',
+      before_projection_digest: projection.projection_digest,
+      after_projection_digest: digest('9'),
+      predicate_summary: {
+        operation_idempotency_key: predicate.operation_idempotency_key,
+        projection_digest: predicate.projection_digest,
+        expected_health_state: predicate.expected_health_state,
+        observed_at: predicate.observed_at,
+        workflow_state: predicate.workflow.state,
+        session_state: predicate.session.state,
+        active_lease_state: predicate.active_lease.state,
+        pending_queued_action_state: predicate.pending_queued_action.state,
+        latest_turn_state: predicate.latest_turn.state,
+        runtime_job_state: predicate.runtime_job.state,
+        run_session_state: predicate.run_session.state,
+        latest_capsule_state: predicate.latest_capsule.state,
+      },
+    };
+
+    expect(recoveryRequestMatchesExistingRecord(existing, incoming)).toBe(true);
+    expect(
+      recoveryRequestMatchesExistingRecord(
+        {
+          ...existing,
+          predicate_summary: {
+            ...existing.predicate_summary,
+            active_lease_state: 'absent',
+          },
+        },
+        incoming,
+      ),
+    ).toBe(false);
   });
 
   it('assertRecoveryPredicateStillMatches passes for exact projection and rejects stale candidate state', () => {
