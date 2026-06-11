@@ -4,7 +4,7 @@
 
 **Goal:** Implement Wave 8 Recovery/Ops Foundation so ForgeLoop can diagnose, recover, scavenge, and audit Plan Item Codex session control-state failures without invoking Codex or exposing raw runtime internals.
 
-**Architecture:** Add a dedicated product-level Session Operations spine beside the existing Plan Item Workflow module. Contracts/domain code define health projections, candidate predicates, redaction, and recovery invariants; persistence records durable health, recovery, and capsule retention pins; API and UI expose scoped operator controls plus public Plan Item diagnostics. Recovery remains control-only and advisory: it fences stale candidates, records audit evidence, and leaves later continue/fork/archive decisions to separate human product actions.
+**Architecture:** Add a dedicated product-level Session Operations control plane beside the existing Plan Item Workflow module. Contracts/domain code define health projections, candidate predicates, redaction, and recovery invariants; persistence records durable health, recovery, and capsule retention pins; API and UI expose scoped operator controls plus public Plan Item diagnostics. Recovery remains control-only and advisory: it fences stale candidates, records audit evidence, and leaves later continue/fork/archive decisions to separate human product actions.
 
 **Tech Stack:** TypeScript, pnpm, Vitest, NestJS, Drizzle/Postgres, Zod contracts, React, TanStack Query, existing `@forgeloop/domain`, `@forgeloop/contracts`, `@forgeloop/db`, Plan Item Workflow, Codex runtime, and internal audit/object-event infrastructure.
 
@@ -12,7 +12,7 @@
 
 ## Scope Check
 
-This plan implements the first slice of `docs/superpowers/specs/2026-06-09-plan-item-session-operations-spine-design.md`: **Recovery/Ops Foundation**.
+This plan implements the first slice of `docs/superpowers/specs/2026-06-09-plan-item-session-operations-control-plane-design.md`: **Recovery/Ops Foundation**.
 
 In scope:
 

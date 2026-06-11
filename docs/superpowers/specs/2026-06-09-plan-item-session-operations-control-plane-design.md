@@ -1,4 +1,4 @@
-# Plan Item Session Operations Spine Design
+# Plan Item Session Operations Control Plane Design
 
 ## Status
 
@@ -17,7 +17,7 @@ hidden fallback to fresh sessions.
 Wave 8 makes that model operable for real team usage. A team will eventually
 see stale worker leases, orphaned queued actions, incomplete capsule lineage,
 operator recovery needs, and explicit session forks. These must not become
-separate ad hoc features. They need one product-level operations spine that can
+separate ad hoc features. They need one product-level operations control plane that can
 diagnose, recover, audit, and later support fork and retention decisions without
 exposing raw Codex runtime internals.
 
@@ -101,7 +101,7 @@ The first implementation slice does not include:
 
 ## Design Decision
 
-Wave 8 uses an **Operations Spine First** design.
+Wave 8 uses an **Operations Control Plane First** design.
 
 Fork, retention, and operator recovery all depend on the same facts:
 
@@ -113,18 +113,18 @@ Fork, retention, and operator recovery all depend on the same facts:
 - whether a human has explicitly chosen a session or fork;
 - whether an operation already recovered or terminalized a stale condition.
 
-Those facts must be computed once through a product-level operations spine, not
+Those facts must be computed once through a product-level operations control plane, not
 reimplemented independently by fork UI, retention jobs, dashboard widgets, and
 CLI commands.
 
-The operations spine has four responsibilities:
+The operations control plane has four responsibilities:
 
 1. derive a safe health projection from existing workflow/session/runtime state;
 2. execute control-only recovery operations with fencing and idempotency;
 3. expose safe diagnostics to the right role and surface;
 4. write audit events for every operational decision.
 
-Later fork and retention features must consume this spine. They must not create
+Later fork and retention features must consume this control plane. They must not create
 parallel health-state logic or raw runtime endpoints.
 
 ## Roles And Permissions
@@ -817,7 +817,7 @@ backwards compatibility.
 
 Wave 8 must not:
 
-- reintroduce `p0` naming;
+- reintroduce retired subsystem naming;
 - add compatibility aliases for retired execution package starts;
 - expose legacy public execution routes that can resume, retry, fork, or rerun
   outside Plan Item Workflow semantics;
@@ -919,7 +919,7 @@ Wave 8 Recovery/Ops Foundation is accepted when:
     in this slice.
 11. A recovered session cannot continue, fork, archive, or change product stage
     until a separate authorized human product action is submitted.
-12. No legacy `p0` or retired execution-package public route can bypass Plan
+12. No retired subsystem name or execution-package public route can bypass Plan
     Item Workflow or Session Operations semantics.
 
 ## Later Wave 8 Slices

@@ -17,6 +17,7 @@ export type ProductPageFamily =
   | 'document-governance'
   | 'delivery-board'
   | 'execution-supervision'
+  | 'operations'
   | 'release-readiness'
   | 'release-evidence'
   | 'report-insight';
@@ -139,6 +140,7 @@ export const canonicalProductRoutes: readonly ProductRouteContract[] = [
   productRoute('/qa', '/qa', 'QA', 'qa-handoff', /^QA$/i),
   productRoute('/executions', '/executions', 'Executions', 'execution-supervision', /^Executions$/i),
   productRoute('/executions/:id', `/executions/${executionId}`, 'Execution', 'execution-supervision', productWorkspacePreviewItemHeading),
+  productRoute('/session-operations', '/session-operations', 'Session Operations', 'operations', /^Session Operations$/i),
   productRoute('/board', '/board', 'Board', 'delivery-board', /^Board$/i),
   productRoute('/releases', '/releases', 'Releases', 'release-readiness', /^Releases$/i),
   productRoute('/releases/:id', `/releases/${releaseId}`, 'Release', 'release-readiness', /Release/i),
