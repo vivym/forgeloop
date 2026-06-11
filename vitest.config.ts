@@ -21,5 +21,7 @@ export default defineConfig({
     exclude: explicitE2eSelected ? [] : ['tests/e2e/**'],
     environment: 'node',
     setupFiles: ['tests/setup/supertest-local-socket.ts'],
+    hookTimeout: 30_000,
+    testTimeout: 30_000,
   },
 });

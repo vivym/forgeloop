@@ -23,6 +23,7 @@ import {
   normalizeProductLaneQuery,
   normalizeProductRegistryQuery,
   normalizeProjectManagementListQuery,
+  normalizeSessionOperationsHealthQuery,
   queryKeys,
 } from './query-keys';
 import type {
@@ -44,9 +45,12 @@ import type {
   ProductCommandAction,
   ProductLaneId,
   ProductLaneQuery,
+  RecoverSessionRequest,
   ReleaseCommandBody,
   RequestReleaseChangesBody,
   ReviewDecisionBody,
+  ScavengeSessionOperationsRequest,
+  SessionOperationsHealthQuery,
   StartReleaseObservingBody,
   UnlinkReleaseScopeBody,
 } from './types';
@@ -353,6 +357,56 @@ export function useQaHandoffsQuery(query: ListProductQuery) {
   return useQuery({
     queryKey: queryKeys.qaHandoffs(normalizedQuery),
     queryFn: () => createQueryApi().listQaHandoffs(normalizedQuery),
+  });
+}
+
+export function useSessionOperationsHealthQuery(query: SessionOperationsHealthQuery) {
+  const normalizedQuery = normalizeSessionOperationsHealthQuery(query);
+
+  return useQuery({
+    queryKey: queryKeys.sessionOperationsHealth(normalizedQuery),
+    queryFn: () => createQueryApi().listSessionOperationsHealth(normalizedQuery),
+  });
+}
+
+export function useSessionOperationsAuditQuery(sessionId: string | undefined) {
+  return useQuery({
+    queryKey: queryKeys.sessionOperationsAudit(sessionId),
+    queryFn: () => createQueryApi().getSessionOperationsAudit(requiredId(sessionId, 'sessionId')),
+    enabled: sessionId !== undefined,
+  });
+}
+
+export function usePlanItemSessionDiagnosticsQuery(planItemId: string | undefined) {
+  return useQuery({
+    queryKey: queryKeys.planItemSessionDiagnostics(planItemId),
+    queryFn: () => createQueryApi().getPlanItemSessionDiagnostics(requiredId(planItemId, 'planItemId')),
+    enabled: planItemId !== undefined,
+  });
+}
+
+export function useRecoverSessionMutation(input: { planItemId?: string } = {}) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: ({ sessionId, request }: { sessionId: string; request: RecoverSessionRequest }) =>
+      createCommandApi().recoverSession(requiredId(sessionId, 'sessionId'), request),
+    onSuccess: (_response, variables) => invalidateSessionOperationsResources(queryClient, variables.sessionId, input.planItemId),
+  });
+}
+
+export function useScavengeSessionOperationsMutation(input: { planItemId?: string } = {}) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (body: ScavengeSessionOperationsRequest) => createCommandApi().scavengeSessionOperations(body),
+    onSuccess: (response) =>
+      Promise.all([
+        invalidateSessionOperationsResources(queryClient, undefined, input.planItemId),
+        ...response.results.map((record) =>
+          invalidateSessionOperationsResources(queryClient, record.codex_session_id, input.planItemId),
+        ),
+      ]),
   });
 }
 
@@ -911,6 +965,22 @@ function invalidateRunDetail(queryClient: QueryClient, runSessionId: string) {
   return Promise.all([
     queryClient.invalidateQueries({ queryKey: queryKeys.run(runSessionId) }),
     queryClient.invalidateQueries({ queryKey: ['run-events', runSessionId] }),
+  ]);
+}
+
+function invalidateSessionOperationsResources(
+  queryClient: QueryClient,
+  sessionId: string | undefined,
+  planItemId: string | undefined,
+) {
+  return Promise.all([
+    queryClient.invalidateQueries({ queryKey: ['session-operations-health'] }),
+    sessionId === undefined
+      ? queryClient.invalidateQueries({ queryKey: ['session-operations-audit'] })
+      : queryClient.invalidateQueries({ queryKey: queryKeys.sessionOperationsAudit(sessionId) }),
+    planItemId === undefined
+      ? queryClient.invalidateQueries({ queryKey: ['plan-item-session-diagnostics'] })
+      : queryClient.invalidateQueries({ queryKey: queryKeys.planItemSessionDiagnostics(planItemId) }),
   ]);
 }
 

@@ -15,3 +15,4 @@ export * from './codex-runtime-capsule.js';
 export * from './internal-artifacts.js';
 export * from './plan-item-workflow.js';
 export * from './work-item-delivery-readiness.js';
+export * from './session-operations.js';

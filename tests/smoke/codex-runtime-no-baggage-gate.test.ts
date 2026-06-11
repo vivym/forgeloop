@@ -6,6 +6,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   codexRuntimeSuperpowersNoBaggageAllowlist,
+  codexRuntimeSuperpowersNoBaggageScanTargets,
   scanCodexRuntimeSuperpowersNoBaggage,
 } from '../../scripts/check-codex-runtime-superpowers-no-baggage';
 
@@ -871,6 +872,115 @@ describe('Codex runtime Superpowers no-baggage gate', () => {
     });
 
     expect(result.violations).toEqual([]);
+  });
+
+  it('keeps session operations product-level and control-only', () => {
+    const scan = scanCodexRuntimeSuperpowersNoBaggage({
+      rootDir: repoRoot,
+    });
+    expect(scan.ok).toBe(true);
+
+    const service = readRepoFile('apps/control-plane-api/src/modules/session-operations/session-operations.service.ts');
+    expect(service).not.toContain('codex_thread_id');
+    expect(service).not.toContain('raw capsule');
+    expect(service).not.toContain('startExecution(');
+    expect(service).not.toContain('createCodexSessionFork(');
+  });
+
+  it('scans every session operations surface in the no-baggage gate', () => {
+    const scanTargets = codexRuntimeSuperpowersNoBaggageScanTargets(repoRoot);
+
+    expect(scanTargets).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining('apps/control-plane-api/src/modules/session-operations'),
+        expect.stringContaining('apps/web/src/features/session-operations'),
+        expect.stringContaining('docs/runbooks/plan-item-session-operations.md'),
+        expect.stringContaining('scripts/session-operations-scavenge.ts'),
+      ]),
+    );
+  });
+
+  it('allows Session Operations API names while rejecting hidden runtime-worker controls', () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), 'forgeloop-no-baggage-session-operations-routes-'));
+    try {
+      const fixtureFile = 'apps/control-plane-api/src/modules/session-operations/session-operations.controller.ts';
+      mkdirSync(join(tempRoot, 'apps/control-plane-api/src/modules/session-operations'), { recursive: true });
+      writeFileSync(
+        join(tempRoot, fixtureFile),
+        [
+          'await fetch("/session-operations/scavenge");',
+          'await fetch("/session-operations/session-1/recover");',
+          "@Post('session-operations/:sessionId/recover')",
+          'await fetch("/runtime-workers/worker-1/scavenge");',
+          "@Post('runtime-workers/:workerId/scavenge')",
+          'await fetch("/codex-sessions/session-1/recover");',
+          "@Post('codex-sessions/:sessionId/recover')",
+          'await fetch("/session-operations/session-1/continue");',
+          "@Post('session-operations/:sessionId/continue')",
+          'await fetch("/session-operations/session-1/fork");',
+          'await fetch("/session-operations/session-1/delete-capsule");',
+        ].join('\n'),
+      );
+
+      const result = scanCodexRuntimeSuperpowersNoBaggage({
+        rootDir: tempRoot,
+        files: [fixtureFile],
+        allowlist: [],
+      });
+
+      expect(result.violations.map((violation) => violation.excerpt)).toEqual([
+        'await fetch("/runtime-workers/worker-1/scavenge");',
+        "@Post('runtime-workers/:workerId/scavenge')",
+        'await fetch("/codex-sessions/session-1/recover");',
+        "@Post('codex-sessions/:sessionId/recover')",
+        'await fetch("/session-operations/session-1/continue");',
+        "@Post('session-operations/:sessionId/continue')",
+        'await fetch("/session-operations/session-1/fork");',
+        'await fetch("/session-operations/session-1/delete-capsule");',
+      ]);
+      expect(result.violations.map((violation) => violation.pattern)).toEqual([
+        'session_operations_hidden_runtime_control',
+        'session_operations_hidden_runtime_control',
+        'session_operations_hidden_runtime_control',
+        'session_operations_hidden_runtime_control',
+        'session_operations_hidden_runtime_control',
+        'session_operations_hidden_runtime_control',
+        'session_operations_hidden_runtime_control',
+        'session_operations_hidden_runtime_control',
+      ]);
+    } finally {
+      rmSync(tempRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('does not allow forbidden runtime internals on Session Operations boundary lines', () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), 'forgeloop-no-baggage-session-operations-internals-'));
+    try {
+      const fixtureFile = 'apps/control-plane-api/src/modules/session-operations/session-operations.service.ts';
+      mkdirSync(join(tempRoot, 'apps/control-plane-api/src/modules/session-operations'), { recursive: true });
+      writeFileSync(
+        join(tempRoot, fixtureFile),
+        [
+          "const safe = ['codex_session_id', 'worker_id', 'latest_capsule_id', 'affected_capsule_ids'];",
+          "const unsafe = ['codex_session_id', 'lease_token_hash', 'runtime_profile_id'];",
+        ].join('\n'),
+      );
+
+      const result = scanCodexRuntimeSuperpowersNoBaggage({
+        rootDir: tempRoot,
+        files: [fixtureFile],
+        allowlist: [],
+      });
+
+      expect(result.violations.map((violation) => violation.excerpt)).toEqual([
+        "const unsafe = ['codex_session_id', 'lease_token_hash', 'runtime_profile_id'];",
+      ]);
+      expect(result.violations.map((violation) => violation.pattern)).toEqual([
+        'public_raw_codex_runtime_ref',
+      ]);
+    } finally {
+      rmSync(tempRoot, { recursive: true, force: true });
+    }
   });
 
   it('keeps new-write runtime artifact paths off legacy storage authorities', () => {

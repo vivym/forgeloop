@@ -5,6 +5,7 @@ const forbiddenDomainErrorCodes = new Set<DomainErrorCode>([
   'FORCE_RERUN_FORBIDDEN',
   'AUTOMATION_CAPABILITY_REJECTED',
   'workflow_actor_not_authorized',
+  'session_operations_unauthorized',
 ]);
 
 const goneDomainErrorCodes = new Set<DomainErrorCode>([
@@ -32,6 +33,11 @@ const conflictDomainErrorCodes = new Set<DomainErrorCode>([
   'codex_session_thread_binding_conflict',
   'codex_session_thread_binding_stale',
   'codex_session_fork_invalid',
+  'session_operations_ambiguous_workflow',
+  'session_operations_stale_candidate',
+  'session_operations_idempotency_conflict',
+  'session_operations_unsupported_operation',
+  'session_operations_control_only_violation',
 ]);
 
 @Catch(DomainError)

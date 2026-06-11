@@ -365,6 +365,53 @@ describe('Development Plan routes', () => {
     expect(screen.queryByRole('button', { name: /start execution/i })).toBeNull();
   });
 
+  it('shows Plan Item session diagnostics without operator-only recovery controls', async () => {
+    const screen = await renderRoute(`/development-plans/${developmentPlan.id}/items/${developmentPlanItem.id}`, {
+      apiOverrides: {
+        [`GET /plan-items/${developmentPlanItem.id}/session-diagnostics`]: {
+          plan_item_id: developmentPlanItem.id,
+          workflow_resolution: 'active_workflow',
+          state: 'blocked_stale_lease',
+          severity: 'blocked',
+          summary: 'Operator recovery is required before the workflow can continue.',
+          operator_intervention_required: true,
+          normal_workflow_actions_available: false,
+          recovery_request_available: true,
+        },
+      },
+    });
+
+    expect(await screen.findByText('Session health')).toBeTruthy();
+    expect(await screen.findByText('Operator recovery is required before the workflow can continue.')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: /^recover$/i })).toBeNull();
+    expect(screen.queryByText(/candidate_predicate/i)).toBeNull();
+    expect(screen.queryByText('workflow-1')).toBeNull();
+    expect(screen.queryByText('session-1')).toBeNull();
+  });
+
+  it('shows recovered state as waiting for a separate human product action', async () => {
+    const screen = await renderRoute(`/development-plans/${developmentPlan.id}/items/${developmentPlanItem.id}`, {
+      apiOverrides: {
+        [`GET /plan-items/${developmentPlanItem.id}/session-diagnostics`]: {
+          plan_item_id: developmentPlanItem.id,
+          workflow_resolution: 'active_workflow',
+          state: 'recovered',
+          severity: 'info',
+          summary: 'Control state recovered. Choose a separate product action before continuing.',
+          operator_intervention_required: false,
+          normal_workflow_actions_available: false,
+          recovery_request_available: false,
+        },
+      },
+    });
+
+    expect(await screen.findByText('Control state recovered. Choose a separate product action before continuing.')).toBeTruthy();
+    expect(screen.getByText(/Continue, fork, and archive remain separate human actions/i)).toBeTruthy();
+    expect(screen.queryByRole('button', { name: /^continue$/i })).toBeNull();
+    expect(screen.queryByRole('button', { name: /fork/i })).toBeNull();
+    expect(screen.queryByRole('button', { name: /archive/i })).toBeNull();
+  });
+
   it('keeps the conversation visible while artifact drawer is open', async () => {
     const user = userEvent.setup();
     const screen = await renderRoute(`/development-plans/${developmentPlan.id}/items/${developmentPlanItem.id}`);

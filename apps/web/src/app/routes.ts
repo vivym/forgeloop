@@ -33,6 +33,7 @@ export default [
     route('board', './routes/board/index.tsx'),
     route('executions', './routes/executions/index.tsx'),
     route('executions/:executionId', './routes/executions/$executionId.tsx'),
+    route('session-operations', './routes/session-operations/index.tsx'),
     route('releases', './routes/releases/index.tsx'),
     route('releases/:releaseId', './routes/releases/$releaseId.tsx'),
     route('releases/:releaseId/evidence', './routes/releases/$releaseId/evidence.tsx'),

@@ -43,6 +43,13 @@
       "when": 1780857165055,
       "tag": "0005_wave7_execution_continuation_review_fix_loop",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1781147788479,
+      "tag": "0006_session_operations_recovery_ops_foundation",
+      "breakpoints": true
     }
   ]
 }

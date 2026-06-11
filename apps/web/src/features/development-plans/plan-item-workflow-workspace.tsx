@@ -11,6 +11,7 @@ import {
   type WorkflowArtifactModel,
   type WorkflowRoleLens,
 } from './plan-item-workflow-view-model';
+import { PlanItemSessionDiagnosticsPanel } from './plan-item-session-diagnostics-panel';
 
 export function PlanItemWorkflowWorkspace({
   boundaryRevisions,
@@ -240,6 +241,8 @@ export function PlanItemWorkflowWorkspace({
               running={runningLabel !== undefined}
             />
           ) : null}
+
+          <PlanItemSessionDiagnosticsPanel planItemId={item.id} />
 
           <section aria-label="Context Preview" className="grid gap-2 rounded-md border border-border bg-background p-3">
             <p className="text-sm font-semibold text-text-primary">Context Preview</p>

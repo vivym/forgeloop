@@ -19,6 +19,7 @@ export type CodexRuntimeSuperpowersBaggagePattern =
   | 'wave7_public_fork_before_wave8'
   | 'wave7_review_response_automation_action_run'
   | 'wave7_public_raw_runtime_ref'
+  | 'session_operations_hidden_runtime_control'
   | 'public_owner_actor_alias'
   | 'execution_package_start_root_label'
   | 'legacy_inline_workspace_bundle_bytes'
@@ -70,6 +71,13 @@ const defaultScanFiles = [
   'apps/control-plane-api/src/modules/codex-runtime/codex-runtime.controller.ts',
   'apps/control-plane-api/src/modules/codex-runtime/codex-runtime.service.ts',
   'apps/control-plane-api/src/modules/codex-runtime/product-generation-runtime-scheduler.service.ts',
+  'apps/control-plane-api/src/modules/session-operations/session-operations.controller.ts',
+  'apps/control-plane-api/src/modules/session-operations/session-operations.dto.ts',
+  'apps/control-plane-api/src/modules/session-operations/session-operations.module.ts',
+  'apps/control-plane-api/src/modules/session-operations/session-operations.service.ts',
+  'apps/web/src/features/session-operations/session-operations-dashboard-route.tsx',
+  'docs/runbooks/plan-item-session-operations.md',
+  'scripts/session-operations-scavenge.ts',
   'apps/control-plane-api/src/modules/run-control/run-control.module.ts',
   'packages/contracts/src/api.ts',
   'packages/codex-runtime/src/payloads.ts',
@@ -89,7 +97,9 @@ const defaultScanRoots = [
   'packages/run-worker',
   'apps/automation-daemon/src',
   'apps/control-plane-api/src/modules',
+  'apps/control-plane-api/src/modules/session-operations',
   'apps/web/src/features/development-plans',
+  'apps/web/src/features/session-operations',
   'apps/web/src/shared/api',
   'docs/runbooks',
   'docs/superpowers/reports',
@@ -127,11 +137,13 @@ const activeStrictScripts = new Set([
   'scripts/codex-runtime-import.ts',
   'scripts/codex-runtime-dogfood-bootstrap.ts',
   'scripts/codex-remote-worker-dogfood.ts',
+  'scripts/session-operations-scavenge.ts',
 ]);
 const activeTask8Tests = new Set([
   'tests/smoke/codex-runtime-no-baggage-gate.test.ts',
   'tests/smoke/codex-runtime-superpowers-dogfood-script.test.ts',
   'tests/smoke/runbook-script-consistency.test.ts',
+  'tests/smoke/session-operations-scavenge-script.test.ts',
 ]);
 const wave5WorkflowProductFiles = new Set([
   'apps/control-plane-api/src/modules/plan-item-workflows/plan-item-workflow.controller.ts',
@@ -164,6 +176,18 @@ const wave7WorkflowProductPublicFiles = new Set([
   'apps/web/src/shared/api/commands.ts',
   'apps/web/src/shared/api/hooks.ts',
   'apps/web/src/shared/api/types.ts',
+]);
+const sessionOperationsControlOnlyFiles = new Set([
+  'apps/control-plane-api/src/modules/session-operations/session-operations.controller.ts',
+  'apps/control-plane-api/src/modules/session-operations/session-operations.dto.ts',
+  'apps/control-plane-api/src/modules/session-operations/session-operations.service.ts',
+  'apps/web/src/features/session-operations/session-operations-dashboard-route.tsx',
+  'apps/web/src/shared/api/commands.ts',
+  'apps/web/src/shared/api/hooks.ts',
+  'apps/web/src/shared/api/query.ts',
+  'apps/web/src/shared/api/query-keys.ts',
+  'apps/web/src/shared/api/types.ts',
+  'scripts/session-operations-scavenge.ts',
 ]);
 
 export const codexRuntimeSuperpowersNoBaggageAllowlist: AllowedMatch[] = [
@@ -433,6 +457,12 @@ export const codexRuntimeSuperpowersNoBaggageAllowlist: AllowedMatch[] = [
     reason: 'Negative test fixture proves the strict gate catches Wave 7 raw runtime refs on public surfaces.',
   },
   {
+    file: 'tests/smoke/codex-runtime-no-baggage-gate.test.ts',
+    pattern: 'session_operations_hidden_runtime_control',
+    owner: 'negative-test',
+    reason: 'Negative test fixture proves the strict gate catches hidden Session Operations runtime-control routes.',
+  },
+  {
     file: 'tests/smoke/codex-runtime-superpowers-dogfood-script.test.ts',
     pattern: 'host_codex_home',
     owner: 'negative-test',
@@ -532,6 +562,12 @@ export const codexRuntimeSuperpowersNoBaggageAllowlist: AllowedMatch[] = [
     reason: 'The guard must name the forbidden Wave 7 raw runtime ref tokens it scans for.',
   },
   {
+    file: 'scripts/check-codex-runtime-superpowers-no-baggage.ts',
+    pattern: 'session_operations_hidden_runtime_control',
+    owner: 'internal-runtime-storage',
+    reason: 'The guard must name the forbidden hidden Session Operations runtime control tokens it scans for.',
+  },
+  {
     file: 'scripts/codex-runtime-superpowers-dogfood.ts',
     pattern: 'host_codex_home',
     owner: 'internal-runtime-storage',
@@ -629,6 +665,11 @@ const baggagePatterns: Record<CodexRuntimeSuperpowersBaggagePattern, RegExp[]> =
     /artifact:\/\//,
     /\/Users\//,
   ],
+  session_operations_hidden_runtime_control: [
+    /[("'`]\s*\/?(?:runtime-workers|codex-workers|run-sessions|codex-sessions)\/[^"'`\s]+\/(?:recover|scavenge|continue|fork|select-fork|select-active-fork|new-session|delete-capsule|delete|retry|rerun)(?:\/|\b)/,
+    /[("'`]\s*\/?session-operations\/[^"'`\s]+\/(?:continue|fork|select-fork|select-active-fork|new-session|delete-capsule|delete|retry|rerun)(?:\/|\b)/,
+    /\b(?:continue|fork|selectFork|selectActiveFork|createSession|createCodexSession|deleteCapsule|deleteRuntimeCapsule|retryExecution|rerunExecution)FromSessionOperations\b/,
+  ],
   public_owner_actor_alias: [
     /\bowner_actor_id\b/,
   ],
@@ -708,6 +749,9 @@ const isIgnoredHistoricalPath = (
   if (pattern === 'public_owner_actor_alias' && !planItemExecutionStartPublicFiles.has(file)) {
     return true;
   }
+  const isSessionOperationsRawRuntimeBoundary =
+    ['public_raw_codex_runtime_ref', 'wave7_public_raw_runtime_ref'].includes(pattern) &&
+    sessionOperationsControlOnlyFiles.has(file);
   const isWave5ProductPatternOutsideWave5Files =
     [
       'legacy_workflow_direct_spec_generation',
@@ -717,7 +761,7 @@ const isIgnoredHistoricalPath = (
       'wave5_forbidden_session_mutation',
       'workflow_composer_generation_action',
       'public_raw_codex_runtime_ref',
-  ].includes(pattern) && !wave5WorkflowProductFiles.has(file);
+  ].includes(pattern) && !wave5WorkflowProductFiles.has(file) && !isSessionOperationsRawRuntimeBoundary;
   const isWave7ProductPatternOutsideWave7Files =
     [
       'wave7_direct_run_session_control',
@@ -725,7 +769,7 @@ const isIgnoredHistoricalPath = (
       'wave7_public_fork_before_wave8',
       'wave7_review_response_automation_action_run',
       'wave7_public_raw_runtime_ref',
-    ].includes(pattern) && !wave7WorkflowProductPublicFiles.has(file);
+    ].includes(pattern) && !wave7WorkflowProductPublicFiles.has(file) && !isSessionOperationsRawRuntimeBoundary;
   const isHistoricalSupportPath =
     pattern !== 'legacy_codex_session_snapshot' &&
     (ignoredHistoricalPathFragments.some((fragment) => file === fragment || file.includes(fragment)) ||
@@ -769,6 +813,52 @@ const packageScriptFilesFor = (rootDir: string): string[] => {
   }
   return [...files].filter((file) => scanExtensions.has(fileExtension(file)));
 };
+
+export const codexRuntimeSuperpowersNoBaggageScanTargets = (rootDir = process.cwd()): string[] => {
+  const resolvedRoot = resolve(rootDir);
+  const activePackageScriptFiles = packageScriptFilesFor(resolvedRoot);
+  return Array.from(
+    new Set(
+      [
+        ...defaultScanFiles,
+        ...activePackageScriptFiles,
+        ...defaultScanRoots.flatMap((scanRoot) => collectFilesUnder(resolvedRoot, scanRoot)),
+        ...legacyCodexSessionSnapshotScanRoots.flatMap((scanRoot) => collectFilesUnder(resolvedRoot, scanRoot)),
+      ].map((file) => relative(resolvedRoot, resolve(resolvedRoot, file))),
+    ),
+  ).sort();
+};
+
+const sessionOperationsAllowedBoundaryFields = [
+  'active_codex_session_id',
+  'codex_session_id',
+  'codex_session_turn_id',
+  'launch_lease_id',
+  'worker_id',
+  'worker_session_digest',
+  'latest_capsule_id',
+  'affected_capsule_ids',
+  'affected_turn_ids',
+];
+
+const sessionOperationsForbiddenBoundaryFields = [
+  'codex_thread_id',
+  'lease_token',
+  'lease_token_hash',
+  'credential_binding_id',
+  'credential_binding_version_id',
+  'runtime_profile_id',
+  'runtime_profile_revision_id',
+  'memory_bundle_ref',
+  'environment_manifest_ref',
+  'internal_object_ref',
+];
+
+const isAllowedSessionOperationsRuntimeBoundaryLine = (line: string): boolean =>
+  sessionOperationsAllowedBoundaryFields.some((field) => new RegExp(`\\b${field}\\b`).test(line)) &&
+  !sessionOperationsForbiddenBoundaryFields.some((field) => new RegExp(`\\b${field}\\b`).test(line)) &&
+  !/\/Users\//.test(line) &&
+  !/artifact:\/\//.test(line);
 
 const isAllowed = (input: {
   file: string;
@@ -829,6 +919,12 @@ const isAllowed = (input: {
   (input.pattern === 'public_raw_codex_runtime_ref' &&
     input.file === 'apps/web/src/shared/api/types.ts' &&
     input.line.includes("from '@forgeloop/contracts'")) ||
+  (input.pattern === 'public_raw_codex_runtime_ref' &&
+    sessionOperationsControlOnlyFiles.has(input.file) &&
+    isAllowedSessionOperationsRuntimeBoundaryLine(input.line)) ||
+  (input.pattern === 'wave7_public_raw_runtime_ref' &&
+    sessionOperationsControlOnlyFiles.has(input.file) &&
+    isAllowedSessionOperationsRuntimeBoundaryLine(input.line)) ||
   (input.pattern === 'wave7_public_raw_runtime_ref' &&
     input.file === 'apps/web/src/features/development-plans/plan-item-workflow-view-model.ts' &&
     isPlanItemWorkflowUiRuntimeSafetyAssertionLine(input.line)) ||
@@ -930,15 +1026,9 @@ export const scanCodexRuntimeSuperpowersNoBaggage = (input: {
 }): CodexRuntimeSuperpowersNoBaggageScanResult => {
   const rootDir = resolve(input.rootDir ?? process.cwd());
   const activePackageScriptFiles = new Set(packageScriptFilesFor(rootDir));
-  const defaultFiles = [
-    ...defaultScanFiles,
-    ...activePackageScriptFiles,
-    ...defaultScanRoots.flatMap((scanRoot) => collectFilesUnder(rootDir, scanRoot)),
-    ...legacyCodexSessionSnapshotScanRoots.flatMap((scanRoot) => collectFilesUnder(rootDir, scanRoot)),
-  ];
   const files = Array.from(
     new Set(
-      (input.files ?? defaultFiles).map((file) => relative(rootDir, resolve(rootDir, file))),
+      (input.files ?? codexRuntimeSuperpowersNoBaggageScanTargets(rootDir)).map((file) => relative(rootDir, resolve(rootDir, file))),
     ),
   ).sort();
   const allowlist = input.allowlist ?? codexRuntimeSuperpowersNoBaggageAllowlist;

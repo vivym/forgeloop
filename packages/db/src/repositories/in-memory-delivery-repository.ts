@@ -55,6 +55,7 @@ import type {
   ObjectEvent,
   Organization,
   Plan,
+  PlanItemSessionHealth,
   PlanRevision,
   PlanItemWorkflowMessage,
   PlanItemWorkflow,
@@ -70,6 +71,7 @@ import type {
   ReviewPacket,
   ReviewPacketEvidenceRef,
   ReviewResponse,
+  SessionRecoveryRecord,
   RunCommand,
   RunEvent,
   RunSession,
@@ -86,7 +88,7 @@ import type {
   WorkItem,
   WorkflowManualDecision,
 } from '@forgeloop/domain';
-import type { ObjectRef } from '@forgeloop/contracts';
+import type { CapsuleRetentionPin, ObjectRef, SessionRecoveryRecordDto } from '@forgeloop/contracts';
 import {
   internalPlanItemWorkflowTransitionSchema,
   internalWorkflowManualDecisionSchema,
@@ -236,7 +238,12 @@ import type {
   AttachCodexSessionRunnerRuntimeJobInput,
   ClaimCodexSessionLeaseInput,
   ClearCodexSessionRunnerOwnerInput,
+  CapsuleRetentionPinRecord,
   ApplyPlanItemWorkflowTransitionInput,
+  ListCapsuleRetentionPinsQuery,
+  ListPlanItemSessionHealthQuery,
+  ListSessionOperationsDiscoveryQuery,
+  ListSessionRecoveryRecordsQuery,
   SelectActiveCodexSessionForkInput,
   WorkflowRepositoryEvidenceInput,
 } from './delivery-repository';
@@ -993,6 +1000,11 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
   private readonly planItemWorkflowArtifactChangeRequests = new Map<string, PlanItemWorkflowArtifactChangeRequest>();
   private readonly workflowManualDecisions = new Map<string, WorkflowManualDecision>();
   private readonly executionReadinessRecords = new Map<string, ExecutionReadinessRecord>();
+  private readonly planItemSessionHealth = new Map<string, PlanItemSessionHealth>();
+  private readonly sessionRecoveryRecords = new Map<string, SessionRecoveryRecord>();
+  private readonly sessionRecoveryRecordIdentities = new Map<string, { workflow_id: string; development_plan_item_id: string }>();
+  private readonly sessionRecoveryRecordsByOperationIdempotencyKey = new Map<string, string>();
+  private readonly capsuleRetentionPins = new Map<string, CapsuleRetentionPin>();
   private readonly codexSessions = new Map<string, CodexSession>();
   private readonly codexSessionTurns = new Map<string, CodexSessionTurn>();
   private readonly codexRuntimeCapsules = new Map<string, CodexRuntimeCapsule>();
@@ -3404,6 +3416,12 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
     return this.cloneMaybe(this.getActivePlanItemWorkflowByItemSync(itemId));
   }
 
+  async listActivePlanItemWorkflowsByItem(itemId: string): Promise<PlanItemWorkflow[]> {
+    return valuesFor(this.planItemWorkflows)
+      .filter((workflow) => workflow.development_plan_item_id === itemId && this.isActivePlanItemWorkflowForSessionOperations(workflow))
+      .sort((left, right) => compareTimestamp(right.updated_at, left.updated_at) || left.id.localeCompare(right.id));
+  }
+
   async savePlanItemWorkflow(workflow: PlanItemWorkflow): Promise<void> {
     const existingWorkflow = this.planItemWorkflows.get(workflow.id);
     if (existingWorkflow === undefined) {
@@ -4954,6 +4972,178 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
     return this.cloneMaybe(this.codexRuntimeCapsules.get(id));
   }
 
+  async upsertPlanItemSessionHealth(health: PlanItemSessionHealth): Promise<PlanItemSessionHealth> {
+    if (health.workflow_id === undefined || health.codex_session_id === undefined || health.development_plan_item_id === undefined) {
+      throw new DomainError(
+        'session_operations_no_active_workflow',
+        'session_operations_no_active_workflow: persisted session health requires workflow, Plan Item, and Codex session identity',
+      );
+    }
+    const safeHealth = this.safePlanItemSessionHealthProjection(health);
+    this.planItemSessionHealth.set(this.planItemSessionHealthKey(health.workflow_id, health.codex_session_id), safeHealth);
+    return clone(safeHealth);
+  }
+
+  async getPlanItemSessionHealth(input: {
+    workflow_id: string;
+    codex_session_id: string;
+  }): Promise<PlanItemSessionHealth | undefined> {
+    return this.cloneMaybe(this.planItemSessionHealth.get(this.planItemSessionHealthKey(input.workflow_id, input.codex_session_id)));
+  }
+
+  async listPlanItemSessionHealth(query: ListPlanItemSessionHealthQuery): Promise<PlanItemSessionHealth[]> {
+    return valuesFor(this.planItemSessionHealth)
+      .filter((health) => this.planItemSessionHealthMatchesQuery(health, query))
+      .sort(
+        (left, right) =>
+          compareTimestamp(right.checked_at, left.checked_at) ||
+          (left.workflow_id ?? '').localeCompare(right.workflow_id ?? '') ||
+          (left.codex_session_id ?? '').localeCompare(right.codex_session_id ?? ''),
+      )
+      .slice(0, query.limit);
+  }
+
+  async listActivePlanItemWorkflowSessionsForSessionOperations(
+    query: ListSessionOperationsDiscoveryQuery,
+  ): Promise<Array<{ workflow_id: string; development_plan_item_id: string; codex_session_id: string }>> {
+    return valuesFor(this.planItemWorkflows)
+      .filter((workflow) => this.isActivePlanItemWorkflowForSessionOperations(workflow))
+      .map((workflow) => {
+        const session =
+          workflow.active_codex_session_id === undefined ? undefined : this.codexSessions.get(workflow.active_codex_session_id);
+        const lease = session?.active_lease_id === undefined ? undefined : this.codexSessionLeases.get(session.active_lease_id);
+        return { workflow, session, lease };
+      })
+      .filter(({ workflow, session, lease }) => {
+        if (
+          session === undefined ||
+          workflow.active_codex_session_id !== session.id ||
+          session.owner_type !== 'plan_item_workflow' ||
+          session.owner_id !== workflow.id ||
+          session.role !== 'active' ||
+          session.status === 'archived'
+        ) {
+          return false;
+        }
+        if (query.development_plan_id !== undefined && workflow.development_plan_id !== query.development_plan_id) {
+          return false;
+        }
+        if (query.project_id !== undefined) {
+          const plan = this.developmentPlans.get(workflow.development_plan_id);
+          if (plan?.project_id !== query.project_id) {
+            return false;
+          }
+        }
+        if (query.development_plan_item_id !== undefined && workflow.development_plan_item_id !== query.development_plan_item_id) {
+          return false;
+        }
+        if (query.workflow_id !== undefined && workflow.id !== query.workflow_id) {
+          return false;
+        }
+        if (query.codex_session_id !== undefined && session.id !== query.codex_session_id) {
+          return false;
+        }
+        if (query.worker_id !== undefined && lease?.worker_id !== query.worker_id && session.runner_worker_id !== query.worker_id) {
+          return false;
+        }
+        if (query.min_lease_age_seconds !== undefined || query.max_lease_age_seconds !== undefined) {
+          if (lease === undefined || lease.status !== 'active') {
+            return false;
+          }
+          const ageSeconds = Math.floor((Date.parse(query.now) - Date.parse(lease.acquired_at)) / 1000);
+          if (query.min_lease_age_seconds !== undefined && ageSeconds < query.min_lease_age_seconds) {
+            return false;
+          }
+          if (query.max_lease_age_seconds !== undefined && ageSeconds > query.max_lease_age_seconds) {
+            return false;
+          }
+        }
+        return true;
+      })
+      .sort(
+        (left, right) =>
+          left.workflow.development_plan_id.localeCompare(right.workflow.development_plan_id) ||
+          left.workflow.development_plan_item_id.localeCompare(right.workflow.development_plan_item_id) ||
+          compareTimestamp(right.workflow.updated_at, left.workflow.updated_at) ||
+          left.workflow.id.localeCompare(right.workflow.id) ||
+          left.session!.id.localeCompare(right.session!.id),
+      )
+      .slice(0, query.limit)
+      .map(({ workflow, session }) => ({
+        workflow_id: workflow.id,
+        development_plan_item_id: workflow.development_plan_item_id,
+        codex_session_id: session!.id,
+      }));
+  }
+
+  async createOrReplaySessionRecoveryRecord(
+    record: SessionRecoveryRecord,
+  ): Promise<{ record: SessionRecoveryRecord; replayed: boolean }> {
+    const existing = await this.getSessionRecoveryRecordByOperationIdempotencyKey(record.operation_idempotency_key);
+    if (existing !== undefined) {
+      this.assertSessionRecoveryReplayMatches(existing, record);
+      return { record: existing, replayed: true };
+    }
+    if (this.sessionRecoveryRecords.has(record.id)) {
+      throw new DomainError(
+        'session_operations_idempotency_conflict',
+        'session_operations_idempotency_conflict: recovery record id already exists for a different operation',
+      );
+    }
+    const identity = this.sessionRecoveryPersistenceIdentity(record);
+    const storedRecord = this.normalizedSessionRecoveryRecord(record);
+    this.sessionRecoveryRecords.set(storedRecord.id, clone(storedRecord));
+    this.sessionRecoveryRecordIdentities.set(storedRecord.id, identity);
+    this.sessionRecoveryRecordsByOperationIdempotencyKey.set(storedRecord.operation_idempotency_key, storedRecord.id);
+    return { record: clone(storedRecord), replayed: false };
+  }
+
+  async getSessionRecoveryRecordByOperationIdempotencyKey(
+    operationIdempotencyKey: string,
+  ): Promise<SessionRecoveryRecord | undefined> {
+    const id = this.sessionRecoveryRecordsByOperationIdempotencyKey.get(operationIdempotencyKey);
+    return id === undefined ? undefined : this.cloneMaybe(this.sessionRecoveryRecords.get(id));
+  }
+
+  async listSessionRecoveryRecords(query: ListSessionRecoveryRecordsQuery): Promise<SessionRecoveryRecord[]> {
+    return valuesFor(this.sessionRecoveryRecords)
+      .filter((record) => this.sessionRecoveryRecordMatchesQuery(record, query))
+      .sort((left, right) => compareTimestamp(right.created_at, left.created_at) || left.id.localeCompare(right.id))
+      .slice(0, query.limit);
+  }
+
+  async upsertCapsuleRetentionPins(pins: readonly CapsuleRetentionPinRecord[]): Promise<void> {
+    for (const pin of pins) {
+      for (const reference of pin.referenced_by) {
+        const key = this.capsuleRetentionPinKey(pin.capsule_id, reference.object_type, reference.object_id, reference.relation);
+        this.capsuleRetentionPins.set(key, clone({ ...pin, referenced_by: [reference] }));
+      }
+    }
+  }
+
+  async listCapsuleRetentionPins(query: ListCapsuleRetentionPinsQuery): Promise<CapsuleRetentionPinRecord[]> {
+    return valuesFor(this.capsuleRetentionPins)
+      .filter((pin) => {
+        if (query.capsule_id !== undefined && pin.capsule_id !== query.capsule_id) {
+          return false;
+        }
+        if (
+          query.referenced_object_type !== undefined &&
+          pin.referenced_by[0]?.object_type !== query.referenced_object_type
+        ) {
+          return false;
+        }
+        if (
+          query.referenced_object_id !== undefined &&
+          pin.referenced_by[0]?.object_id !== query.referenced_object_id
+        ) {
+          return false;
+        }
+        return true;
+      })
+      .sort((left, right) => left.capsule_id.localeCompare(right.capsule_id) || left.capsule_digest.localeCompare(right.capsule_digest));
+  }
+
   async saveStaleCodexSessionTerminalizationAttempt(attempt: CodexSessionStaleTerminalizationAttempt): Promise<void> {
     if (this.codexSessionStaleTerminalizationAttempts.has(attempt.id)) {
       throw new DomainError(
@@ -5000,6 +5190,10 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
   }
 
   async claimCodexSessionLease(input: ClaimCodexSessionLeaseInput): Promise<{ session: CodexSession; lease: CodexSessionLease }> {
+    return this.withObjectLock(`codex-session:${input.session_id}`, () => this.claimCodexSessionLeaseUnlocked(input));
+  }
+
+  private async claimCodexSessionLeaseUnlocked(input: ClaimCodexSessionLeaseInput): Promise<{ session: CodexSession; lease: CodexSessionLease }> {
     if (this.codexSessionLeases.has(input.lease_id)) {
       throw new DomainError('codex_session_lease_conflict', `codex_session_lease_conflict: Codex session lease ${input.lease_id} is not unique`);
     }
@@ -5102,10 +5296,7 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
       fenced_at: input.now,
       updated_at: input.now,
     };
-    const {
-      active_lease_id: _activeLeaseId,
-      ...sessionWithoutActiveLease
-    } = clone(session);
+    const { active_lease_id: _activeLeaseId, ...sessionWithoutActiveLease } = clone(session);
     const recoveredSession: CodexSession = {
       ...sessionWithoutActiveLease,
       status: 'recovering',
@@ -5114,6 +5305,124 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
     this.codexSessionLeases.set(fencedLease.id, clone(fencedLease));
     this.codexSessions.set(recoveredSession.id, clone(recoveredSession));
     return { session: clone(recoveredSession), lease: clone(fencedLease) };
+  }
+
+  async releaseStaleCodexSessionLeaseForSessionOperations(input: {
+    session_id: string;
+    workflow_id: string;
+    lease_id: string;
+    now: string;
+  }): Promise<{ session: CodexSession; lease: CodexSessionLease }> {
+    const session = this.codexSessions.get(input.session_id);
+    const workflow = session === undefined ? undefined : this.planItemWorkflows.get(session.owner_id);
+    const lease = this.codexSessionLeases.get(input.lease_id);
+    if (
+      session === undefined ||
+      workflow === undefined ||
+      lease === undefined ||
+      session.owner_type !== 'plan_item_workflow' ||
+      session.owner_id !== input.workflow_id ||
+      workflow.id !== input.workflow_id ||
+      workflow.active_codex_session_id !== session.id ||
+      session.active_lease_id !== lease.id ||
+      lease.codex_session_id !== session.id ||
+      lease.status !== 'active' ||
+      lease.expires_at > input.now
+    ) {
+      throw new DomainError(
+        'codex_session_lease_conflict',
+        `codex_session_lease_conflict: Codex session lease ${input.lease_id} cannot be released by session operations`,
+      );
+    }
+    const fencedLease: CodexSessionLease = {
+      ...clone(lease),
+      status: 'fenced',
+      fenced_at: input.now,
+      updated_at: input.now,
+    };
+    const {
+      active_lease_id: _activeLeaseId,
+      runner_worker_id: _runnerWorkerId,
+      runner_launch_lease_id: _runnerLaunchLeaseId,
+      runner_runtime_job_id: _runnerRuntimeJobId,
+      runner_expires_at: _runnerExpiresAt,
+      ...sessionWithoutActiveLease
+    } = clone(session);
+    const shouldClearRunner =
+      session.runner_worker_id === lease.worker_id ||
+      session.runner_launch_lease_id === lease.id ||
+      (session.runner_expires_at !== undefined && session.runner_expires_at <= input.now);
+    const recoveredSession: CodexSession = {
+      ...(shouldClearRunner
+        ? sessionWithoutActiveLease
+        : {
+            ...sessionWithoutActiveLease,
+            runner_worker_id: session.runner_worker_id,
+            runner_launch_lease_id: session.runner_launch_lease_id,
+            runner_runtime_job_id: session.runner_runtime_job_id,
+            runner_expires_at: session.runner_expires_at,
+          }),
+      status: 'recovering',
+      updated_at: input.now,
+    };
+    this.codexSessionLeases.set(fencedLease.id, clone(fencedLease));
+    this.codexSessions.set(recoveredSession.id, clone(recoveredSession));
+    return { session: clone(recoveredSession), lease: clone(fencedLease) };
+  }
+
+  async stalePlanItemWorkflowQueuedActionForSessionOperations(input: {
+    workflow_id: string;
+    action_id: string;
+    reason: string;
+    now: string;
+  }): Promise<PlanItemWorkflowQueuedAction> {
+    const action = this.planItemWorkflowQueuedActions.get(input.action_id);
+    if (
+      action === undefined ||
+      action.workflow_id !== input.workflow_id ||
+      (action.status !== 'queued' && action.status !== 'running')
+    ) {
+      throw new DomainError(
+        'workflow_action_not_runnable',
+        `workflow_action_not_runnable: Plan Item Workflow queued action ${input.action_id} cannot be marked stale by session operations`,
+      );
+    }
+    const updated: PlanItemWorkflowQueuedAction = {
+      ...clone(action),
+      status: 'stale',
+      blocked_reason_code: input.reason,
+      updated_at: input.now,
+    };
+    this.planItemWorkflowQueuedActions.set(updated.id, clone(updated));
+    return clone(updated);
+  }
+
+  async terminalizeCodexRuntimeJobForSessionOperations(input: {
+    runtime_job_id: string;
+    terminal_status: NonNullable<CodexRuntimeJob['terminal_status']>;
+    reason_code: string;
+    now: string;
+  }): Promise<CodexRuntimeJob> {
+    const record = this.codexRuntimeJobs.get(input.runtime_job_id);
+    if (record === undefined || record.job.status === 'terminal') {
+      throw new DomainError(
+        'codex_runtime_job_unavailable',
+        `codex_runtime_job_unavailable: Codex runtime job ${input.runtime_job_id} cannot be terminalized by session operations`,
+      );
+    }
+    const terminalRecord = {
+      ...record,
+      job: {
+        ...record.job,
+        status: 'terminal' as const,
+        terminal_status: input.terminal_status,
+        terminal_reason_code: input.reason_code,
+        terminal_at: input.now,
+        updated_at: input.now,
+      },
+    };
+    this.codexRuntimeJobs.set(input.runtime_job_id, clone(terminalRecord));
+    return clone(terminalRecord.job);
   }
 
   private recoverExpiredActiveCodexSessionLeaseForClaim(
@@ -5755,6 +6064,197 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
 
   private findActiveCodexSessionLease(sessionId: string): CodexSessionLease | undefined {
     return valuesFor(this.codexSessionLeases).find((lease) => lease.codex_session_id === sessionId && lease.status === 'active');
+  }
+
+  private planItemSessionHealthKey(workflowId: string, codexSessionId: string): string {
+    return `${workflowId}:${codexSessionId}`;
+  }
+
+  private capsuleRetentionPinKey(capsuleId: string, objectType: string, objectId: string, relation: string): string {
+    return `${capsuleId}:${objectType}:${objectId}:${relation}`;
+  }
+
+  private isActivePlanItemWorkflowForSessionOperations(workflow: PlanItemWorkflow): boolean {
+    return workflow.status !== 'archived';
+  }
+
+  private planItemSessionHealthMatchesQuery(
+    health: PlanItemSessionHealth,
+    query: ListPlanItemSessionHealthQuery,
+  ): boolean {
+    if (query.project_id !== undefined && health.project_id !== query.project_id) {
+      return false;
+    }
+    if (query.development_plan_id !== undefined && health.development_plan_id !== query.development_plan_id) {
+      return false;
+    }
+    if (query.development_plan_item_id !== undefined && health.development_plan_item_id !== query.development_plan_item_id) {
+      return false;
+    }
+    if (query.workflow_id !== undefined && health.workflow_id !== query.workflow_id) {
+      return false;
+    }
+    if (query.codex_session_id !== undefined && health.codex_session_id !== query.codex_session_id) {
+      return false;
+    }
+    if (query.state !== undefined && health.state !== query.state) {
+      return false;
+    }
+    if (query.severity !== undefined && health.severity !== query.severity) {
+      return false;
+    }
+    if (query.recovered_state !== undefined && health.state !== query.recovered_state) {
+      return false;
+    }
+    if (query.candidate_only === true && health.recovery_available !== true) {
+      return false;
+    }
+    if (query.include_recovered !== true && health.state === 'recovered') {
+      return false;
+    }
+    if (query.include_unrecoverable !== true && health.state === 'unrecoverable') {
+      return false;
+    }
+    return true;
+  }
+
+  private assertSessionRecoveryReplayMatches(existing: SessionRecoveryRecord, incoming: SessionRecoveryRecord): void {
+    const scalarFields = [
+      'operation',
+      'actor_id',
+      'codex_session_id',
+      'reason',
+      'before_state',
+      'after_state',
+      'before_projection_digest',
+      'after_projection_digest',
+      'result',
+      'result_code',
+    ] as const;
+    const arrayFields = [
+      'affected_lease_ids',
+      'affected_queued_action_ids',
+      'affected_turn_ids',
+      'affected_runtime_job_ids',
+      'affected_run_session_ids',
+      'affected_capsule_ids',
+    ] as const;
+    const scalarsMatch = scalarFields.every((field) => existing[field] === incoming[field]);
+    const arraysMatch = arrayFields.every((field) => valuesEqual(existing[field], incoming[field]));
+    if (!scalarsMatch || !arraysMatch || !valuesEqual(this.sessionRecoveryPredicateSummary(existing), this.sessionRecoveryPredicateSummary(incoming))) {
+      throw new DomainError(
+        'session_operations_idempotency_conflict',
+        'session_operations_idempotency_conflict: recovery idempotency key was replayed with different recovery record identity',
+      );
+    }
+  }
+
+  private sessionRecoveryPredicateSummary(record: SessionRecoveryRecord): SessionRecoveryRecordDto['predicate_summary'] {
+    const predicate = record.predicate_summary;
+    if ('workflow' in predicate) {
+      return {
+        operation_idempotency_key: predicate.operation_idempotency_key,
+        projection_digest: predicate.projection_digest,
+        expected_health_state: predicate.expected_health_state,
+        observed_at: predicate.observed_at,
+        workflow_state: predicate.workflow.state,
+        session_state: predicate.session.state,
+        active_lease_state: predicate.active_lease.state,
+        pending_queued_action_state: predicate.pending_queued_action.state,
+        latest_turn_state: predicate.latest_turn.state,
+        runtime_job_state: predicate.runtime_job.state,
+        run_session_state: predicate.run_session.state,
+        latest_capsule_state: predicate.latest_capsule.state,
+      };
+    }
+    return predicate;
+  }
+
+  private safePlanItemSessionHealthProjection(health: PlanItemSessionHealth): PlanItemSessionHealth {
+    const { candidate_predicate: _candidatePredicate, ...safeHealth } = clone(health);
+    return safeHealth;
+  }
+
+  private normalizedSessionRecoveryRecord(record: SessionRecoveryRecord): SessionRecoveryRecord {
+    return {
+      ...clone(record),
+      predicate_summary: this.sessionRecoveryPredicateSummary(record),
+    };
+  }
+
+  private sessionRecoveryRecordMatchesQuery(
+    record: SessionRecoveryRecord,
+    query: ListSessionRecoveryRecordsQuery,
+  ): boolean {
+    const identity = this.sessionRecoveryRecordIdentities.get(record.id) ?? this.sessionRecoveryPersistenceIdentity(record);
+    const workflowId = identity.workflow_id;
+    const developmentPlanItemId = identity.development_plan_item_id;
+    if (query.workflow_id !== undefined && workflowId !== query.workflow_id) {
+      return false;
+    }
+    if (query.development_plan_item_id !== undefined && developmentPlanItemId !== query.development_plan_item_id) {
+      return false;
+    }
+    if (query.codex_session_id !== undefined && record.codex_session_id !== query.codex_session_id) {
+      return false;
+    }
+    if (query.operation !== undefined && record.operation !== query.operation) {
+      return false;
+    }
+    if (query.result !== undefined && record.result !== query.result) {
+      return false;
+    }
+    if (query.recovered_state !== undefined && record.after_state !== query.recovered_state) {
+      return false;
+    }
+    if (query.health_states !== undefined && !query.health_states.includes(record.after_state)) {
+      return false;
+    }
+    return true;
+  }
+
+  private sessionRecoveryPersistenceIdentity(record: SessionRecoveryRecord): { workflow_id: string; development_plan_item_id: string } {
+    if (record.workflow_id !== undefined && record.development_plan_item_id !== undefined) {
+      const workflow = this.planItemWorkflows.get(record.workflow_id);
+      if (
+        workflow === undefined ||
+        workflow.status === 'archived' ||
+        workflow.development_plan_item_id !== record.development_plan_item_id
+      ) {
+        throw new DomainError(
+          'session_operations_no_active_workflow',
+          'session_operations_no_active_workflow: recovery record requires an active workflow identity',
+        );
+      }
+      return {
+        workflow_id: workflow.id,
+        development_plan_item_id: workflow.development_plan_item_id,
+      };
+    }
+    const session = this.codexSessions.get(record.codex_session_id);
+    if (session === undefined || session.owner_type !== 'plan_item_workflow') {
+      throw new DomainError(
+        'session_operations_no_active_workflow',
+        'session_operations_no_active_workflow: recovery record requires a concrete workflow-owned Codex session',
+      );
+    }
+    const workflow = this.planItemWorkflows.get(session.owner_id);
+    if (
+      workflow === undefined ||
+      workflow.active_codex_session_id !== session.id ||
+      workflow.status === 'archived' ||
+      (record.workflow_id !== undefined && workflow.id !== record.workflow_id) ||
+      (record.development_plan_item_id !== undefined && workflow.development_plan_item_id !== record.development_plan_item_id)
+    ) {
+      throw new DomainError(
+        'session_operations_no_active_workflow',
+        'session_operations_no_active_workflow: recovery record requires an active workflow identity',
+      );
+    }
+    return {
+      workflow_id: workflow.id,
+      development_plan_item_id: workflow.development_plan_item_id,
+    };
   }
 
   private assertCanSavePlanItemWorkflow(workflow: PlanItemWorkflow): void {
@@ -9775,6 +10275,11 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
       this.planItemWorkflowArtifactChangeRequests,
       this.workflowManualDecisions,
       this.executionReadinessRecords,
+      this.planItemSessionHealth,
+      this.sessionRecoveryRecords,
+      this.sessionRecoveryRecordIdentities,
+      this.sessionRecoveryRecordsByOperationIdempotencyKey,
+      this.capsuleRetentionPins,
       this.codexSessions,
       this.codexSessionTurns,
       this.codexRuntimeCapsules,

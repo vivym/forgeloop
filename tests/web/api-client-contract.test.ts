@@ -10,6 +10,71 @@ import {
   roleLensValues,
 } from '../../apps/web/src/features/product-surfaces/role-lens';
 
+const recoverPredicateFixture = () => ({
+  codex_session_id: 'session-1',
+  workflow_id: 'workflow-1',
+  expected_health_state: 'blocked_stale_lease',
+  operation_idempotency_key: 'recover-session-1-stale-lease',
+  projection_digest: `sha256:${'a'.repeat(64)}`,
+  workflow: {
+    checked: true,
+    state: 'present',
+    value: {
+      id: 'workflow-1',
+      development_plan_id: 'development-plan-1',
+      development_plan_item_id: 'item-1',
+      status: 'execution_running',
+      updated_at: '2026-06-09T00:00:00.000Z',
+      active_codex_session_id: 'session-1',
+      active_boundary_summary_revision_id: null,
+      active_spec_doc_revision_id: null,
+      active_implementation_plan_doc_revision_id: null,
+      execution_package_id: null,
+    },
+  },
+  session: {
+    checked: true,
+    state: 'present',
+    value: {
+      id: 'session-1',
+      workflow_id: 'workflow-1',
+      status: 'running',
+      role: 'active',
+      updated_at: '2026-06-09T00:00:00.000Z',
+      active_lease_id: 'lease-1',
+      lease_epoch: 3,
+      runner_worker_id: null,
+      runner_launch_lease_id: null,
+      runner_runtime_job_id: null,
+      runner_expires_at: null,
+      latest_turn_id: null,
+      latest_capsule_id: null,
+      latest_capsule_digest: null,
+    },
+  },
+  active_lease: {
+    checked: true,
+    state: 'present',
+    value: {
+      id: 'lease-1',
+      session_id: 'session-1',
+      status: 'active',
+      lease_epoch: 3,
+      worker_id: 'worker-1',
+      worker_session_digest: `sha256:${'b'.repeat(64)}`,
+      heartbeat_at: '2026-06-09T00:01:00.000Z',
+      expires_at: '2026-06-09T00:02:00.000Z',
+      updated_at: '2026-06-09T00:01:00.000Z',
+    },
+  },
+  pending_queued_action: { checked: true, state: 'absent' },
+  latest_turn: { checked: true, state: 'absent' },
+  runtime_job: { checked: true, state: 'absent' },
+  run_session: { checked: true, state: 'absent' },
+  latest_capsule: { checked: true, state: 'absent' },
+  observed_at: '2026-06-09T00:03:00.000Z',
+});
+
 describe('AI-native web API client contract', () => {
   it('exposes AI-native workflow commands without product Task or direct Spec/Plan commands', () => {
     const commands = createForgeloopCommandApi();
@@ -161,6 +226,72 @@ describe('AI-native web API client contract', () => {
       'http://api.local/query/development-plans?project_id=project-1&driver_actor_id=actor-product&execution_owner_actor_id=actor-dev&reviewer_actor_id=actor-reviewer&qa_owner_actor_id=actor-qa&release_owner_actor_id=actor-release',
       expect.objectContaining({ method: 'GET' }),
     );
+  });
+
+  it('calls product-level session operations routes', async () => {
+    const responses = [
+      { items: [], filters: { state: 'blocked_stale_lease' } },
+      {
+        plan_item_id: 'item-1',
+        workflow_resolution: 'active_workflow',
+        summary: 'Worker lease expired.',
+        operator_intervention_required: true,
+        normal_workflow_actions_available: false,
+        recovery_request_available: true,
+      },
+      { record: { id: 'recovery-1' }, before: {}, after: {}, replayed: false },
+      { mode: 'dry_run', candidates: [] },
+    ];
+    const fetchMock = vi.fn(async () =>
+      new Response(JSON.stringify(responses.shift()), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      }),
+    );
+    const queryApi = createForgeloopQueryApi({ baseUrl: 'http://api.local', fetch: fetchMock });
+    const commandApi = createForgeloopCommandApi({ baseUrl: 'http://api.local', fetch: fetchMock });
+
+    await queryApi.listSessionOperationsHealth({ state: 'blocked_stale_lease' });
+    await queryApi.getPlanItemSessionDiagnostics('item-1');
+    await commandApi.recoverSession('session-1', {
+      operation_idempotency_key: 'recover-session-1-stale-lease',
+      operation: 'recover',
+      reason: 'Release stale worker lease.',
+      candidate_predicate: recoverPredicateFixture(),
+    });
+    await commandApi.scavengeSessionOperations({ mode: 'dry_run' });
+
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      1,
+      'http://api.local/session-operations/health?state=blocked_stale_lease',
+      expect.objectContaining({ method: 'GET' }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      'http://api.local/plan-items/item-1/session-diagnostics',
+      expect.objectContaining({ method: 'GET' }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      3,
+      'http://api.local/session-operations/session-1/recover',
+      expect.objectContaining({ method: 'POST' }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      4,
+      'http://api.local/session-operations/scavenge',
+      expect.objectContaining({ method: 'POST' }),
+    );
+    expect(JSON.parse(String(fetchMock.mock.calls[2]?.[1]?.body))).toMatchObject({
+      operation: 'recover',
+      operation_idempotency_key: 'recover-session-1-stale-lease',
+      candidate_predicate: {
+        codex_session_id: 'session-1',
+        workflow: { checked: true, state: 'present', value: { id: 'workflow-1' } },
+        active_lease: { checked: true, state: 'present', value: { worker_id: 'worker-1' } },
+      },
+    });
+    expect(JSON.parse(String(fetchMock.mock.calls[2]?.[1]?.body))).not.toHaveProperty('actor_id');
+    expect(JSON.parse(String(fetchMock.mock.calls[3]?.[1]?.body))).toEqual({ mode: 'dry_run' });
   });
 
   it('keeps execution owner filters in Product Lane URL state for Plan Item execution views', () => {
