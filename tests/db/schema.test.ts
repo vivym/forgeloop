@@ -284,6 +284,10 @@ describe('P1 core schema release flow Drizzle schema', () => {
     expect(latestMigrationMeta.tables['public.execution_readiness_records']?.columns.invalidated_reason).toBeDefined();
     expect(latestMigrationMeta.tables['public.plan_item_session_health']).toBeDefined();
     expect(latestMigrationMeta.tables['public.session_recovery_records']).toBeDefined();
+    expect(latestMigrationMeta.tables['public.session_recovery_records']?.columns.id).toMatchObject({ type: 'text' });
+    expect(latestMigrationMeta.tables['public.session_recovery_records']?.columns.object_event_id).toMatchObject({
+      type: 'text',
+    });
     expect(latestMigrationMeta.tables['public.capsule_retention_pins']).toBeDefined();
     expect(latestMigrationMeta.tables['public.spec_revisions']?.columns.development_plan_item_revision_id).toBeDefined();
     expect(latestMigrationMeta.tables['public.execution_plan_revisions']?.columns.development_plan_item_revision_id).toBeDefined();
@@ -389,6 +393,11 @@ describe('P1 core schema release flow Drizzle schema', () => {
     expect(dbSchema).not.toHaveProperty('contracts');
     expect(dbSchema).not.toHaveProperty('contract_revisions');
     expect(dbSchema).not.toHaveProperty('package_contract_links');
+  });
+
+  it('stores digest-derived session recovery record identifiers as text', () => {
+    expect(columnType(session_recovery_records, 'id')).toBe('PgText');
+    expect(columnType(session_recovery_records, 'object_event_id')).toBe('PgText');
   });
 
   it('exports P1 core enum value sets used by domain state machines', () => {

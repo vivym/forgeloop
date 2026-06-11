@@ -5071,7 +5071,7 @@
       "columns": {
         "id": {
           "name": "id",
-          "type": "uuid",
+          "type": "text",
           "primaryKey": true,
           "notNull": true
         },
@@ -5203,7 +5203,7 @@
         },
         "object_event_id": {
           "name": "object_event_id",
-          "type": "uuid",
+          "type": "text",
           "primaryKey": false,
           "notNull": false
         },

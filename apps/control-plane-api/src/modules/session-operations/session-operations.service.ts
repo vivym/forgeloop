@@ -625,21 +625,22 @@ export class SessionOperationsService {
       const affectedCapsuleId = before.candidate_predicate?.latest_capsule.state === 'present'
         ? before.candidate_predicate.latest_capsule.value.id
         : before.candidate_predicate?.session.state === 'present'
-          ? before.candidate_predicate.session.value.id
+          ? before.candidate_predicate.session.value.latest_capsule_id
           : undefined;
+      const affectedCapsuleIds = affectedCapsuleId === undefined || affectedCapsuleId === null ? [] : [affectedCapsuleId];
       if (operation === 'mark_unrecoverable') {
         return {
           result: 'applied',
           result_code: 'marked_unrecoverable_missing_capsule',
           after_state: 'unrecoverable',
-          affected_capsule_ids: affectedCapsuleId === undefined ? [] : [affectedCapsuleId],
+          affected_capsule_ids: affectedCapsuleIds,
         };
       }
       return {
         result: 'blocked',
         result_code: 'unsupported_missing_capsule_recovery',
         after_state: before.state,
-        affected_capsule_ids: affectedCapsuleId === undefined ? [] : [affectedCapsuleId],
+        affected_capsule_ids: affectedCapsuleIds,
       };
     }
     if (before.state === 'blocked_lineage_conflict') {
