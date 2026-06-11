@@ -354,6 +354,8 @@ describe('session operations API', () => {
     expect(response.body.after.normal_workflow_actions_available).not.toBe(true);
     const records = await seeded.repository.listSessionRecoveryRecords({ codex_session_id: seeded.sessionId });
     expect(records.at(-1)?.operation).toBe('mark_unrecoverable');
+    expect(records.at(-1)?.affected_capsule_ids).toEqual(['88888899-1111-4111-8111-111111113001']);
+    expect(records.at(-1)?.affected_capsule_ids).not.toContain(seeded.sessionId);
   });
 
   it('keeps recovered state durable until a separate human product action clears it', async () => {

@@ -333,7 +333,7 @@ export const plan_item_session_health = pgTable(
 export const session_recovery_records = pgTable(
   'session_recovery_records',
   {
-    id: uuid('id').primaryKey(),
+    id: text('id').primaryKey(),
     operationIdempotencyKey: text('operation_idempotency_key').notNull(),
     operation: text('operation').$type<SessionRecoveryRecord['operation']>().notNull(),
     result: text('result').$type<SessionRecoveryRecord['result']>().notNull(),
@@ -362,7 +362,7 @@ export const session_recovery_records = pgTable(
     affectedRuntimeJobIds: jsonb('affected_runtime_job_ids').$type<string[]>().notNull().default([]),
     affectedRunSessionIds: jsonb('affected_run_session_ids').$type<string[]>().notNull().default([]),
     affectedCapsuleIds: jsonb('affected_capsule_ids').$type<string[]>().notNull().default([]),
-    objectEventId: uuid('object_event_id'),
+    objectEventId: text('object_event_id'),
     createdAt: timestampColumn('created_at').notNull(),
   },
   (table) => [

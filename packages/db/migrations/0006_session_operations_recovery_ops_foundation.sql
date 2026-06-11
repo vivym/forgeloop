@@ -30,7 +30,7 @@ CREATE TABLE "plan_item_session_health" (
 );
 --> statement-breakpoint
 CREATE TABLE "session_recovery_records" (
-	"id" uuid PRIMARY KEY NOT NULL,
+	"id" text PRIMARY KEY NOT NULL,
 	"operation_idempotency_key" text NOT NULL,
 	"operation" text NOT NULL,
 	"result" text NOT NULL,
@@ -51,7 +51,7 @@ CREATE TABLE "session_recovery_records" (
 	"affected_runtime_job_ids" jsonb DEFAULT '[]'::jsonb NOT NULL,
 	"affected_run_session_ids" jsonb DEFAULT '[]'::jsonb NOT NULL,
 	"affected_capsule_ids" jsonb DEFAULT '[]'::jsonb NOT NULL,
-	"object_event_id" uuid,
+	"object_event_id" text,
 	"created_at" timestamp with time zone NOT NULL
 );
 --> statement-breakpoint
