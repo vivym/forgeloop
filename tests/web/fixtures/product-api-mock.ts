@@ -673,6 +673,18 @@ export const defaultProductApiResponses: ProductApiResponseMap = {
     items: developmentPlanItemRows.filter((item) => item.development_plan_ref.id === developmentPlan.id),
     href: `/development-plans/${developmentPlan.id}`,
   },
+  [`GET /plan-items/${developmentPlanItem.id}/session-diagnostics`]: {
+    plan_item_id: developmentPlanItem.id,
+    workflow_resolution: 'active_workflow',
+    workflow_id: 'workflow-product-workspace-preview',
+    codex_session_id: 'session-product-workspace-preview',
+    state: 'healthy',
+    severity: 'none',
+    summary: 'Session control state is healthy.',
+    operator_intervention_required: false,
+    normal_workflow_actions_available: true,
+    recovery_request_available: false,
+  },
   ...Object.fromEntries(productWorkspaceDevelopmentPlans.filter((plan) => plan.id !== developmentPlan.id).map((plan) => [
     `GET /query/development-plans/${plan.id}`,
     {
