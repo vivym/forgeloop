@@ -59,6 +59,7 @@ import type {
   ObjectEvent,
   Organization,
   Plan,
+  PlanItemSessionHealth,
   PlanRevision,
   PlanItemWorkflowMessage,
   PlanItemWorkflow,
@@ -73,6 +74,9 @@ import type {
   ReviewPacket,
   ReviewPacketEvidenceRef,
   ReviewResponse,
+  SessionRecoveryRecord,
+  ListSessionHealthProjectionsQuery,
+  ListSessionRecoveryRecordsQuery as DomainListSessionRecoveryRecordsQuery,
   QaHandoff,
   RunCommand,
   RunEvent,
@@ -90,7 +94,7 @@ import type {
   WorkflowManualDecision,
 } from '@forgeloop/domain';
 import { DomainError, parseInternalArtifactRef } from '@forgeloop/domain';
-import type { BoundaryRound, ObjectRef, WorkflowTransitionEvidenceObjectType } from '@forgeloop/contracts';
+import type { BoundaryRound, CapsuleRetentionPin, ObjectRef, WorkflowTransitionEvidenceObjectType } from '@forgeloop/contracts';
 import type { PlanItemWorkflowQueuedActionKind } from '@forgeloop/contracts';
 
 import type { trace_link_relationship_values } from '../schema/_shared';
@@ -313,6 +317,18 @@ export interface CreatePlanItemWorkflowWithInitialSessionInput {
   actor_id: string;
   now: string;
 }
+
+export type ListPlanItemSessionHealthQuery = ListSessionHealthProjectionsQuery;
+export type ListSessionRecoveryRecordsQuery = DomainListSessionRecoveryRecordsQuery;
+export type ListSessionOperationsDiscoveryQuery = Omit<ListSessionHealthProjectionsQuery, 'state' | 'severity' | 'recovered_state' | 'candidate_only' | 'include_recovered' | 'include_unrecoverable'> & {
+  now: string;
+};
+export type ListCapsuleRetentionPinsQuery = {
+  capsule_id?: string;
+  referenced_object_type?: string;
+  referenced_object_id?: string;
+};
+export type CapsuleRetentionPinRecord = CapsuleRetentionPin;
 
 export interface ReplaceActiveCodexSessionForWorkflowInput {
   workflow_id: string;
@@ -1664,6 +1680,7 @@ export interface DeliveryRepository {
   ): Promise<{ workflow: PlanItemWorkflow; session: CodexSession }>;
   getPlanItemWorkflow(id: string): Promise<PlanItemWorkflow | undefined>;
   getActivePlanItemWorkflowByItem(itemId: string): Promise<PlanItemWorkflow | undefined>;
+  listActivePlanItemWorkflowsByItem(itemId: string): Promise<PlanItemWorkflow[]>;
   savePlanItemWorkflow(workflow: PlanItemWorkflow): Promise<void>;
   applyPlanItemWorkflowTransition(input: ApplyPlanItemWorkflowTransitionInput): Promise<PlanItemWorkflow>;
   listPlanItemWorkflowTransitions(workflowId: string): Promise<PlanItemWorkflowTransition[]>;
@@ -1717,6 +1734,19 @@ export interface DeliveryRepository {
   markCodexSessionTurnStale(input: { session_id: string; turn_id: string; now: string }): Promise<void>;
   createCodexRuntimeCapsule(capsule: CodexRuntimeCapsule): Promise<void>;
   getCodexRuntimeCapsule(id: string): Promise<CodexRuntimeCapsule | undefined>;
+  upsertPlanItemSessionHealth(health: PlanItemSessionHealth): Promise<PlanItemSessionHealth>;
+  getPlanItemSessionHealth(input: { workflow_id: string; codex_session_id: string }): Promise<PlanItemSessionHealth | undefined>;
+  listPlanItemSessionHealth(query: ListPlanItemSessionHealthQuery): Promise<PlanItemSessionHealth[]>;
+  listActivePlanItemWorkflowSessionsForSessionOperations(
+    query: ListSessionOperationsDiscoveryQuery,
+  ): Promise<Array<{ workflow_id: string; development_plan_item_id: string; codex_session_id: string }>>;
+  createOrReplaySessionRecoveryRecord(
+    record: SessionRecoveryRecord,
+  ): Promise<{ record: SessionRecoveryRecord; replayed: boolean }>;
+  getSessionRecoveryRecordByOperationIdempotencyKey(operationIdempotencyKey: string): Promise<SessionRecoveryRecord | undefined>;
+  listSessionRecoveryRecords(query: ListSessionRecoveryRecordsQuery): Promise<SessionRecoveryRecord[]>;
+  upsertCapsuleRetentionPins(pins: readonly CapsuleRetentionPinRecord[]): Promise<void>;
+  listCapsuleRetentionPins(query: ListCapsuleRetentionPinsQuery): Promise<CapsuleRetentionPinRecord[]>;
   saveStaleCodexSessionTerminalizationAttempt(attempt: CodexSessionStaleTerminalizationAttempt): Promise<void>;
   listStaleCodexSessionTerminalizationAttempts(sessionId: string): Promise<CodexSessionStaleTerminalizationAttempt[]>;
   getCodexSessionLease(id: string): Promise<CodexSessionLease | undefined>;

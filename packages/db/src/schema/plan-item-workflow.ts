@@ -7,16 +7,20 @@ import type {
   CodexSessionStaleTerminalizationAttempt,
   CodexSessionTurn,
   ExecutionReadinessRecord,
+  PlanItemSessionHealth,
   PlanItemWorkflow,
   PlanItemWorkflowMessage,
   PlanItemWorkflowQueuedAction,
   PlanItemWorkflowTransition,
+  SessionRecoveryRecord,
   WorkflowManualDecision,
 } from '@forgeloop/domain';
+import type { CapsuleRetentionPin } from '@forgeloop/contracts';
 
 import { timestampColumn } from './_shared';
 import { actors } from './actor';
 import { development_plan_items, development_plans } from './development-plan';
+import { projects } from './project';
 
 export const plan_item_workflows = pgTable(
   'plan_item_workflows',
@@ -287,6 +291,114 @@ export const execution_readiness_records = pgTable(
     index('execution_readiness_records_item_idx').on(table.developmentPlanItemId),
     index('execution_readiness_records_session_idx').on(table.codexSessionId),
     index('execution_readiness_records_plan_revision_idx').on(table.approvedImplementationPlanRevisionId),
+  ],
+);
+
+export const plan_item_session_health = pgTable(
+  'plan_item_session_health',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    projectId: uuid('project_id')
+      .notNull()
+      .references(() => projects.id),
+    organizationId: uuid('organization_id'),
+    workflowId: uuid('workflow_id')
+      .notNull()
+      .references(() => plan_item_workflows.id),
+    developmentPlanId: uuid('development_plan_id').references(() => development_plans.id),
+    developmentPlanItemId: uuid('development_plan_item_id')
+      .notNull()
+      .references(() => development_plan_items.id),
+    codexSessionId: uuid('codex_session_id')
+      .notNull()
+      .references(() => codex_sessions.id),
+    state: text('state').$type<PlanItemSessionHealth['state']>().notNull(),
+    severity: text('severity').$type<PlanItemSessionHealth['severity']>().notNull(),
+    reasonCode: text('reason_code'),
+    summary: text('summary').notNull(),
+    projectionDigest: text('projection_digest').notNull(),
+    safeProjectionJson: jsonb('safe_projection_json').$type<Omit<PlanItemSessionHealth, 'candidate_predicate'>>().notNull(),
+    checkedAt: timestampColumn('checked_at').notNull(),
+    updatedAt: timestampColumn('updated_at').notNull(),
+  },
+  (table) => [
+    uniqueIndex('plan_item_session_health_workflow_session_idx').on(table.workflowId, table.codexSessionId),
+    index('plan_item_session_health_project_idx').on(table.projectId, table.state, table.severity),
+    index('plan_item_session_health_state_idx').on(table.state, table.severity),
+    index('plan_item_session_health_item_idx').on(table.developmentPlanItemId),
+    index('plan_item_session_health_session_idx').on(table.codexSessionId),
+  ],
+);
+
+export const session_recovery_records = pgTable(
+  'session_recovery_records',
+  {
+    id: uuid('id').primaryKey(),
+    operationIdempotencyKey: text('operation_idempotency_key').notNull(),
+    operation: text('operation').$type<SessionRecoveryRecord['operation']>().notNull(),
+    result: text('result').$type<SessionRecoveryRecord['result']>().notNull(),
+    resultCode: text('result_code').notNull(),
+    reason: text('reason').notNull(),
+    actorId: uuid('actor_id')
+      .notNull()
+      .references(() => actors.id),
+    workflowId: uuid('workflow_id')
+      .notNull()
+      .references(() => plan_item_workflows.id),
+    developmentPlanItemId: uuid('development_plan_item_id')
+      .notNull()
+      .references(() => development_plan_items.id),
+    codexSessionId: uuid('codex_session_id')
+      .notNull()
+      .references(() => codex_sessions.id),
+    beforeState: text('before_state').$type<SessionRecoveryRecord['before_state']>().notNull(),
+    afterState: text('after_state').$type<SessionRecoveryRecord['after_state']>().notNull(),
+    beforeProjectionDigest: text('before_projection_digest').notNull(),
+    afterProjectionDigest: text('after_projection_digest').notNull(),
+    predicateSummary: jsonb('predicate_summary').$type<SessionRecoveryRecord['predicate_summary']>().notNull(),
+    affectedLeaseIds: jsonb('affected_lease_ids').$type<string[]>().notNull().default([]),
+    affectedQueuedActionIds: jsonb('affected_queued_action_ids').$type<string[]>().notNull().default([]),
+    affectedTurnIds: jsonb('affected_turn_ids').$type<string[]>().notNull().default([]),
+    affectedRuntimeJobIds: jsonb('affected_runtime_job_ids').$type<string[]>().notNull().default([]),
+    affectedRunSessionIds: jsonb('affected_run_session_ids').$type<string[]>().notNull().default([]),
+    affectedCapsuleIds: jsonb('affected_capsule_ids').$type<string[]>().notNull().default([]),
+    objectEventId: uuid('object_event_id'),
+    createdAt: timestampColumn('created_at').notNull(),
+  },
+  (table) => [
+    uniqueIndex('session_recovery_records_operation_idempotency_key_idx').on(table.operationIdempotencyKey),
+    index('session_recovery_records_workflow_idx').on(table.workflowId, table.createdAt),
+    index('session_recovery_records_item_idx').on(table.developmentPlanItemId, table.createdAt),
+    index('session_recovery_records_session_idx').on(table.codexSessionId),
+    index('session_recovery_records_created_idx').on(table.createdAt),
+    index('session_recovery_records_result_idx').on(table.operation, table.result),
+  ],
+);
+
+export const capsule_retention_pins = pgTable(
+  'capsule_retention_pins',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    capsuleId: uuid('capsule_id').notNull(),
+    capsuleDigest: text('capsule_digest').notNull(),
+    pinState: text('pin_state').$type<CapsuleRetentionPin['pin_state']>().notNull(),
+    pinReasons: jsonb('pin_reasons').$type<CapsuleRetentionPin['pin_reasons']>().notNull().default([]),
+    referencedObjectType: text('referenced_object_type').notNull(),
+    referencedObjectId: text('referenced_object_id').notNull(),
+    referenceRelation: text('reference_relation').notNull(),
+    referencedBy: jsonb('referenced_by').$type<CapsuleRetentionPin['referenced_by']>().notNull().default([]),
+    checkedAt: timestampColumn('checked_at').notNull(),
+  },
+  (table) => [
+    uniqueIndex('capsule_retention_pins_capsule_reference_idx').on(
+      table.capsuleId,
+      table.referencedObjectType,
+      table.referencedObjectId,
+      table.referenceRelation,
+    ),
+    index('capsule_retention_pins_capsule_idx').on(table.capsuleId),
+    index('capsule_retention_pins_state_idx').on(table.pinState),
+    index('capsule_retention_pins_reference_idx').on(table.referencedObjectType, table.referencedObjectId),
   ],
 );
 

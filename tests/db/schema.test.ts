@@ -66,6 +66,9 @@ import {
   codex_session_turns,
   command_idempotency_records,
   execution_readiness_records,
+  plan_item_session_health,
+  session_recovery_records,
+  capsule_retention_pins,
   plan_item_workflow_artifact_change_requests,
   plan_item_workflow_messages,
   plan_item_workflow_queued_actions,
@@ -136,6 +139,9 @@ const requiredTables = {
   manual_path_hold_idempotency_records,
   command_idempotency_records,
   execution_readiness_records,
+  plan_item_session_health,
+  session_recovery_records,
+  capsule_retention_pins,
   plan_item_workflow_artifact_change_requests,
   plan_item_workflow_messages,
   plan_item_workflow_queued_actions,
@@ -276,6 +282,9 @@ describe('P1 core schema release flow Drizzle schema', () => {
     expect(latestMigrationMeta.tables['public.plan_item_workflow_artifact_change_requests']).toBeDefined();
     expect(latestMigrationMeta.tables['public.execution_readiness_records']?.columns.invalidated_at).toBeDefined();
     expect(latestMigrationMeta.tables['public.execution_readiness_records']?.columns.invalidated_reason).toBeDefined();
+    expect(latestMigrationMeta.tables['public.plan_item_session_health']).toBeDefined();
+    expect(latestMigrationMeta.tables['public.session_recovery_records']).toBeDefined();
+    expect(latestMigrationMeta.tables['public.capsule_retention_pins']).toBeDefined();
     expect(latestMigrationMeta.tables['public.spec_revisions']?.columns.development_plan_item_revision_id).toBeDefined();
     expect(latestMigrationMeta.tables['public.execution_plan_revisions']?.columns.development_plan_item_revision_id).toBeDefined();
   });
@@ -324,6 +333,9 @@ describe('P1 core schema release flow Drizzle schema', () => {
         'development_plan_source_links',
         'development_plans',
         'execution_readiness_records',
+        'plan_item_session_health',
+        'session_recovery_records',
+        'capsule_retention_pins',
         'plan_item_workflow_artifact_change_requests',
         'plan_item_workflow_messages',
         'plan_item_workflow_queued_actions',

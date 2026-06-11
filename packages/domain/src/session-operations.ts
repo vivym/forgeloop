@@ -109,7 +109,13 @@ export interface SessionRecoveryRecord extends Omit<SessionRecoveryRecordDto, 'p
 }
 
 export type ListSessionHealthProjectionsQuery = SessionOperationsHealthQuery;
-export type ListSessionRecoveryRecordsQuery = SessionOperationsFilter & {
+export type ListSessionRecoveryRecordsQuery = {
+  workflow_id?: string;
+  development_plan_item_id?: string;
+  codex_session_id?: string;
+  recovered_state?: 'recovered' | 'unrecoverable';
+  health_states?: PlanItemSessionHealthState[];
+  limit?: number;
   operation?: SessionRecoveryRecord['operation'];
   result?: SessionRecoveryRecord['result'];
 };
