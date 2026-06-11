@@ -87,7 +87,12 @@ const workflowPredicateValueShape = {
   development_plan_id: nonEmpty,
   development_plan_item_id: nonEmpty,
   status: planItemWorkflowStatusSchema,
-  updated_at: isoDateTimeSchema.optional(),
+  active_codex_session_id: nonEmpty.nullable(),
+  active_boundary_summary_revision_id: nonEmpty.nullable(),
+  active_spec_doc_revision_id: nonEmpty.nullable(),
+  active_implementation_plan_doc_revision_id: nonEmpty.nullable(),
+  execution_package_id: nonEmpty.nullable(),
+  updated_at: isoDateTimeSchema,
 } satisfies z.ZodRawShape;
 
 const sessionPredicateValueShape = {
@@ -95,58 +100,78 @@ const sessionPredicateValueShape = {
   workflow_id: nonEmpty,
   status: codexSessionStatusSchema,
   role: codexSessionRoleSchema,
-  worker_session_digest: safeDigestSchema.optional(),
+  lease_epoch: nonNegativeIntegerSchema,
+  active_lease_id: nonEmpty.nullable(),
+  latest_turn_id: nonEmpty.nullable(),
+  latest_capsule_id: nonEmpty.nullable(),
+  latest_capsule_digest: safeDigestSchema.nullable(),
   codex_thread_id_digest: safeDigestSchema.optional(),
-  runner_worker_id: nonEmpty.optional(),
-  runner_launch_lease_id: nonEmpty.optional(),
-  runner_runtime_job_id: nonEmpty.optional(),
-  runner_expires_at: isoDateTimeSchema.optional(),
-  updated_at: isoDateTimeSchema.optional(),
+  runner_worker_id: nonEmpty.nullable(),
+  runner_launch_lease_id: nonEmpty.nullable(),
+  runner_runtime_job_id: nonEmpty.nullable(),
+  runner_expires_at: isoDateTimeSchema.nullable(),
+  updated_at: isoDateTimeSchema,
 } satisfies z.ZodRawShape;
 
 const activeLeasePredicateValueShape = {
   id: nonEmpty,
   session_id: nonEmpty,
   status: codexSessionLeaseStatusSchema,
-  worker_session_digest: safeDigestSchema.optional(),
+  lease_epoch: nonNegativeIntegerSchema,
+  worker_id: nonEmpty,
+  worker_session_digest: safeDigestSchema,
+  heartbeat_at: isoDateTimeSchema.nullable(),
   expires_at: isoDateTimeSchema,
-  updated_at: isoDateTimeSchema.optional(),
+  updated_at: isoDateTimeSchema,
 } satisfies z.ZodRawShape;
 
 const pendingQueuedActionPredicateValueShape = {
   id: nonEmpty,
-  workflow_id: nonEmpty,
+  workflow_id: nonEmpty.nullable(),
+  codex_session_id: nonEmpty.nullable(),
   kind: planItemWorkflowQueuedActionKindSchema,
   status: planItemWorkflowQueuedActionStatusSchema,
   idempotency_key: safeDigestSchema,
   codex_session_turn_id: nonEmpty.nullable(),
   expected_input_capsule_digest: safeDigestSchema.nullable(),
-  updated_at: isoDateTimeSchema.optional(),
+  updated_at: isoDateTimeSchema,
 } satisfies z.ZodRawShape;
 
 const latestTurnPredicateValueShape = {
   id: nonEmpty,
   session_id: nonEmpty,
+  workflow_id: nonEmpty,
   status: codexSessionTurnStatusSchema,
-  input_capsule_digest: safeDigestSchema.optional(),
-  output_capsule_digest: safeDigestSchema.optional(),
-  updated_at: isoDateTimeSchema.optional(),
+  input_digest: safeDigestSchema,
+  input_capsule_digest: safeDigestSchema.nullable(),
+  output_capsule_digest: safeDigestSchema.nullable(),
+  runtime_job_id: nonEmpty.nullable(),
+  updated_at: isoDateTimeSchema,
 } satisfies z.ZodRawShape;
 
 const runtimeJobPredicateValueShape = {
   id: nonEmpty,
   session_id: nonEmpty,
   status: z.enum(['queued', 'running', 'succeeded', 'failed', 'cancelled', 'stale', 'unknown']),
-  worker_session_digest: safeDigestSchema.optional(),
-  updated_at: isoDateTimeSchema.optional(),
+  terminal_status: z.enum(['succeeded', 'failed', 'cancelled', 'expired']).nullable(),
+  worker_id: nonEmpty,
+  launch_lease_id: nonEmpty,
+  worker_session_digest: safeDigestSchema.nullable(),
+  expires_at: isoDateTimeSchema,
+  updated_at: isoDateTimeSchema,
 } satisfies z.ZodRawShape;
 
 const runSessionPredicateValueShape = {
   id: nonEmpty,
+  workflow_id: nonEmpty.nullable(),
+  codex_session_id: nonEmpty.nullable(),
+  codex_session_turn_id: nonEmpty.nullable(),
   status: nonEmpty,
-  input_capsule_digest: safeDigestSchema.optional(),
-  output_capsule_digest: safeDigestSchema.optional(),
-  updated_at: isoDateTimeSchema.optional(),
+  remote_runtime_job_id: nonEmpty.nullable(),
+  remote_run_worker_lease_id: nonEmpty.nullable(),
+  input_capsule_digest: safeDigestSchema.nullable(),
+  output_capsule_digest: safeDigestSchema.nullable(),
+  updated_at: isoDateTimeSchema,
 } satisfies z.ZodRawShape;
 
 const latestCapsulePredicateValueShape = {

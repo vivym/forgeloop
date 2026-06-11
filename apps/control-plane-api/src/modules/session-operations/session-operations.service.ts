@@ -464,9 +464,13 @@ export class SessionOperationsService {
               id: runtimeJob.id,
               session_id: runtimeJob.codex_session_id ?? session.id,
               status: this.runtimeJobStatus(runtimeJob.status),
+              ...(runtimeJob.terminal_status === undefined ? {} : { terminal_status: runtimeJob.terminal_status }),
+              worker_id: runtimeJob.worker_id,
+              launch_lease_id: runtimeJob.launch_lease_id,
               ...(runtimeJob.accepted_worker_session_digest === undefined
                 ? {}
                 : { worker_session_digest: runtimeJob.accepted_worker_session_digest }),
+              expires_at: runtimeJob.expires_at,
               updated_at: runtimeJob.updated_at,
             }),
           }),
@@ -558,7 +562,7 @@ export class SessionOperationsService {
       const queuedAction = before.candidate_predicate?.pending_queued_action.state === 'present'
         ? before.candidate_predicate.pending_queued_action.value
         : undefined;
-      if (queuedAction !== undefined) {
+      if (queuedAction !== undefined && queuedAction.workflow_id !== null) {
         await repository.stalePlanItemWorkflowQueuedActionForSessionOperations({
           workflow_id: queuedAction.workflow_id,
           action_id: queuedAction.id,

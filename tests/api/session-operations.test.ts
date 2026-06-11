@@ -1,4 +1,5 @@
 import request from 'supertest';
+import { readFileSync } from 'node:fs';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { DELIVERY_REPOSITORY } from '../../apps/control-plane-api/src/modules/core/control-plane-tokens';
@@ -171,6 +172,36 @@ describe('session operations API', () => {
 
     expect(replay.body.replayed).toBe(true);
     expect(replay.body.record.id).toBe(response.body.record.id);
+  });
+
+  it('does not mutate workflow product evidence or enable continuation when recovery applies', async () => {
+    const seeded = await seedBlockedStaleLeaseCandidate('88888916');
+    apps.push(seeded.app);
+    const beforeWorkflow = await seeded.repository.getPlanItemWorkflow(seeded.workflowId);
+
+    await request(seeded.app.getHttpServer())
+      .post(`/session-operations/${seeded.sessionId}/recover`)
+      .set(signedHumanHeaders(seeded.actorId))
+      .send({
+        operation_idempotency_key: seeded.predicate.operation_idempotency_key,
+        operation: 'recover',
+        reason: 'Release stale worker lease after heartbeat expiry.',
+        candidate_predicate: seeded.predicate,
+      })
+      .expect(201);
+
+    const afterWorkflow = await seeded.repository.getPlanItemWorkflow(seeded.workflowId);
+    expect(afterWorkflow?.status).toBe(beforeWorkflow?.status);
+    expect(afterWorkflow?.active_boundary_summary_revision_id).toBe(beforeWorkflow?.active_boundary_summary_revision_id);
+    expect(afterWorkflow?.active_spec_doc_revision_id).toBe(beforeWorkflow?.active_spec_doc_revision_id);
+    expect(afterWorkflow?.active_implementation_plan_doc_revision_id).toBe(beforeWorkflow?.active_implementation_plan_doc_revision_id);
+    expect(afterWorkflow?.execution_package_id).toBe(beforeWorkflow?.execution_package_id);
+
+    const diagnostics = await request(seeded.app.getHttpServer())
+      .get(`/plan-items/${seeded.itemId}/session-diagnostics`)
+      .set(signedDeveloperHeaders(seeded.actorId))
+      .expect(200);
+    expect(diagnostics.body.normal_workflow_actions_available).toBe(false);
   });
 
   it('rejects stale lease recovery when runner owner changes after candidate capture', async () => {
@@ -672,5 +703,15 @@ describe('session operations API', () => {
       })
       .expect(201);
     expect(blockedResponse.body.results.map((result: { result: string }) => result.result)).toEqual(['blocked']);
+  });
+
+  it('keeps session operations recovery independent from Codex execution APIs', () => {
+    const source = readFileSync('apps/control-plane-api/src/modules/session-operations/session-operations.service.ts', 'utf8');
+
+    expect(source).not.toContain('startExecution');
+    expect(source).not.toContain('continueExecution');
+    expect(source).not.toContain('createCodexSessionFork');
+    expect(source).not.toContain('selectActiveCodexSessionFork');
+    expect(source).not.toContain('ProductGenerationRuntimeScheduler');
   });
 });

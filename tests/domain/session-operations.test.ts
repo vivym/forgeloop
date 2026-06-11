@@ -134,6 +134,19 @@ const runSession = (overrides: Partial<RunSession> = {}): RunSession => ({
   ...overrides,
 });
 
+const runtimeJob = (overrides: Partial<BuildSessionHealthProjectionInput['runtime_job']> = {}): BuildSessionHealthProjectionInput['runtime_job'] => ({
+  id: 'runtime-job-1',
+  session_id: 'session-1',
+  status: 'running',
+  terminal_status: undefined,
+  worker_id: 'worker-1',
+  launch_lease_id: 'launch-lease-1',
+  worker_session_digest: digest('5'),
+  expires_at: later,
+  updated_at: earlier,
+  ...overrides,
+});
+
 const baseInput = (overrides: Partial<BuildSessionHealthProjectionInput> = {}): BuildSessionHealthProjectionInput => ({
   project_id: 'project-1',
   organization_id: 'org-1',
@@ -405,13 +418,7 @@ describe('session operations domain helpers', () => {
   it('runtime job without run session projects blocked_orphaned_action', () => {
     const projection = buildSessionHealthProjection(
       baseInput({
-        runtime_job: {
-          id: 'runtime-job-1',
-          session_id: 'session-1',
-          status: 'running',
-          worker_session_digest: digest('5'),
-          updated_at: earlier,
-        },
+        runtime_job: runtimeJob(),
         run_session: undefined,
       }),
     );
@@ -430,13 +437,7 @@ describe('session operations domain helpers', () => {
     const projection = buildSessionHealthProjection(
       baseInput({
         active_lease: undefined,
-        runtime_job: {
-          id: 'runtime-job-1',
-          session_id: 'session-1',
-          status: 'running',
-          worker_session_digest: digest('5'),
-          updated_at: earlier,
-        },
+        runtime_job: runtimeJob(),
         run_session: runSession({ status: 'running' }),
       }),
     );
@@ -701,6 +702,202 @@ describe('session operations domain helpers', () => {
     expect(() => assertRecoveryPredicateStillMatches(changedLease, initial.candidate_predicate!)).toThrow(
       /session_operations_stale_candidate/,
     );
+  });
+
+  it.each([
+    [
+      'workflow status changed',
+      () => baseInput({ active_lease: lease({ expires_at: checkedAt }) }),
+      () => baseInput({ workflow: workflow({ status: 'execution_ready' }), active_lease: lease({ expires_at: checkedAt }) }),
+    ],
+    [
+      'workflow artifact pointers changed',
+      () => baseInput({ active_lease: lease({ expires_at: checkedAt }) }),
+      () =>
+        baseInput({
+          workflow: workflow({
+            active_boundary_summary_revision_id: 'boundary-revision-2',
+            active_spec_doc_revision_id: 'spec-revision-2',
+            active_implementation_plan_doc_revision_id: 'plan-revision-2',
+            execution_package_id: 'execution-package-2',
+          }),
+          active_lease: lease({ expires_at: checkedAt }),
+        }),
+    ],
+    [
+      'workflow updated_at changed',
+      () => baseInput({ active_lease: lease({ expires_at: checkedAt }) }),
+      () => baseInput({ workflow: workflow({ updated_at: later }), active_lease: lease({ expires_at: checkedAt }) }),
+    ],
+    [
+      'session lease epoch and active owner changed',
+      () => baseInput({ active_lease: lease({ expires_at: checkedAt }) }),
+      () =>
+        baseInput({
+          session: session({
+            lease_epoch: 2,
+            active_lease_id: 'lease-2',
+            latest_turn_id: 'turn-2',
+            latest_capsule_id: 'capsule-2',
+            latest_capsule_digest: digest('9'),
+          }),
+          active_lease: lease({ id: 'lease-2', lease_epoch: 2, expires_at: checkedAt }),
+          latest_capsule: capsule({ id: 'capsule-2', digest: digest('9'), sequence: 2 }),
+          retention_pin_inputs: {
+            active_session: session({
+              lease_epoch: 2,
+              active_lease_id: 'lease-2',
+              latest_turn_id: 'turn-2',
+              latest_capsule_id: 'capsule-2',
+              latest_capsule_digest: digest('9'),
+            }),
+            capsules: [capsule({ id: 'capsule-2', digest: digest('9'), sequence: 2 })],
+          },
+        }),
+    ],
+    [
+      'session runner owner fields changed',
+      () =>
+        baseInput({
+          session: session({
+            runner_worker_id: 'runner-1',
+            runner_launch_lease_id: 'runner-launch-1',
+            runner_runtime_job_id: 'runner-runtime-1',
+            runner_expires_at: checkedAt,
+          }),
+          active_lease: lease({ expires_at: checkedAt }),
+        }),
+      () =>
+        baseInput({
+          session: session({
+            runner_worker_id: 'runner-2',
+            runner_launch_lease_id: 'runner-launch-2',
+            runner_runtime_job_id: 'runner-runtime-2',
+            runner_expires_at: later,
+          }),
+          active_lease: lease({ expires_at: checkedAt }),
+        }),
+    ],
+    [
+      'active lease identity status worker epoch and heartbeat changed',
+      () => baseInput({ active_lease: lease({ expires_at: checkedAt }) }),
+      () =>
+        baseInput({
+          active_lease: lease({
+            id: 'lease-2',
+            lease_epoch: 2,
+            worker_id: 'worker-2',
+            worker_session_digest: digest('9'),
+            status: 'released',
+            heartbeat_at: later,
+            expires_at: checkedAt,
+            updated_at: later,
+          }),
+        }),
+    ],
+    [
+      'queued action idempotency status and turn changed',
+      () => baseInput({ active_lease: undefined, pending_queued_action: queuedAction() }),
+      () =>
+        baseInput({
+          active_lease: undefined,
+          pending_queued_action: queuedAction({
+            status: 'running',
+            idempotency_key: digest('9'),
+            codex_session_turn_id: 'turn-2',
+            expected_input_capsule_digest: digest('8'),
+            updated_at: later,
+          }),
+        }),
+    ],
+    [
+      'latest turn status digests runtime job and updated_at changed',
+      () => baseInput({ active_lease: lease({ expires_at: checkedAt }) }),
+      () =>
+        baseInput({
+        latest_turn: {
+          id: 'turn-1',
+          workflow_id: 'workflow-1',
+          codex_session_id: 'session-1',
+          intent: 'continue_execution',
+          status: 'running',
+          input_digest: digest('8'),
+          input_capsule_digest: digest('8'),
+          output_capsule_digest: digest('9'),
+            runtime_job_id: 'runtime-job-2',
+            created_by_actor_id: 'actor-1',
+            created_at: earlier,
+            updated_at: later,
+          },
+          active_lease: lease({ expires_at: checkedAt }),
+        }),
+    ],
+    [
+      'runtime job status terminal owner lease expiry and updated_at changed',
+      () => baseInput({ runtime_job: runtimeJob(), run_session: undefined }),
+      () =>
+        baseInput({
+          runtime_job: runtimeJob({
+            status: 'failed',
+            terminal_status: 'expired',
+            worker_id: 'worker-2',
+            launch_lease_id: 'launch-lease-2',
+            worker_session_digest: digest('9'),
+            expires_at: checkedAt,
+            updated_at: later,
+          }),
+          run_session: undefined,
+        }),
+    ],
+    [
+      'run session status remote refs digests and updated_at changed',
+      () => baseInput({ active_lease: undefined, runtime_job: runtimeJob(), run_session: runSession({ status: 'running' }) }),
+      () =>
+        baseInput({
+          active_lease: undefined,
+          runtime_job: runtimeJob(),
+          run_session: runSession({
+            status: 'failed',
+            codex_session_turn_id: 'turn-2',
+            runtime_metadata: {
+              durability_mode: 'durable',
+              recovery_attempt_count: 0,
+              effective_dangerous_mode: 'not_requested',
+              remote_runtime_job_id: 'runtime-job-2',
+              remote_run_worker_lease_id: 'run-worker-lease-2',
+              input_capsule_digest: digest('8'),
+              output_capsule_digest: digest('9'),
+            },
+            updated_at: later,
+          }),
+        }),
+    ],
+    [
+      'latest capsule id digest sequence and created_at changed',
+      () => baseInput({ active_lease: lease({ expires_at: checkedAt }) }),
+      () =>
+        baseInput({
+          session: session({ latest_capsule_id: 'capsule-2', latest_capsule_digest: digest('9') }),
+          latest_capsule: capsule({ id: 'capsule-2', digest: digest('9'), sequence: 2, created_at: later }),
+          retention_pin_inputs: {
+            active_session: session({ latest_capsule_id: 'capsule-2', latest_capsule_digest: digest('9') }),
+            capsules: [capsule({ id: 'capsule-2', digest: digest('9'), sequence: 2, created_at: later })],
+          },
+          active_lease: lease({ expires_at: checkedAt }),
+        }),
+    ],
+  ])('rejects stale candidate when %s', (_label, originalInput, changedInput) => {
+    const original = buildSessionHealthProjection(originalInput());
+    const changed = buildSessionHealthProjection(changedInput());
+
+    expect(original.candidate_predicate).toBeDefined();
+    expect(changed.projection_digest).not.toBe(original.projection_digest);
+    expect(() => assertRecoveryPredicateStillMatches(changed, original.candidate_predicate!)).toThrow(DomainError);
+    try {
+      assertRecoveryPredicateStillMatches(changed, original.candidate_predicate!);
+    } catch (error) {
+      expect((error as DomainError).code).toBe('session_operations_stale_candidate');
+    }
   });
 
   it('recoveryRequestMatchesExistingRecord rejects idempotency collisions with different operation targets', () => {

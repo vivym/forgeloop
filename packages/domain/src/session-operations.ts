@@ -37,8 +37,12 @@ export interface RuntimeJobRef {
   id: string;
   session_id: string;
   status: 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled' | 'stale' | 'unknown';
+  terminal_status?: 'succeeded' | 'failed' | 'cancelled' | 'expired';
+  worker_id: string;
+  launch_lease_id: string;
   worker_session_digest?: string;
-  updated_at?: IsoDateTime;
+  expires_at: IsoDateTime;
+  updated_at: IsoDateTime;
 }
 
 export interface LatestCheckpointRef {
@@ -239,43 +243,56 @@ export const buildSessionRecoveryCandidatePredicate = (
     }),
     projection_digest: projectionDigest,
     workflow: observed(input.workflow, (workflow) =>
-      optionalObject({
+      ({
         id: workflow.id,
         development_plan_id: workflow.development_plan_id,
         development_plan_item_id: workflow.development_plan_item_id,
         status: workflow.status,
+        active_codex_session_id: workflow.active_codex_session_id ?? null,
+        active_boundary_summary_revision_id: workflow.active_boundary_summary_revision_id ?? null,
+        active_spec_doc_revision_id: workflow.active_spec_doc_revision_id ?? null,
+        active_implementation_plan_doc_revision_id: workflow.active_implementation_plan_doc_revision_id ?? null,
+        execution_package_id: workflow.execution_package_id ?? null,
         updated_at: workflow.updated_at,
       }),
     ),
     session: observed(input.session, (session) =>
-      optionalObject({
+      ({
         id: session.id,
         workflow_id: session.owner_id,
         status: session.status,
         role: session.role,
-        worker_session_digest: undefined,
-        codex_thread_id_digest: session.codex_thread_id_digest,
-        runner_worker_id: session.runner_worker_id,
-        runner_launch_lease_id: session.runner_launch_lease_id,
-        runner_runtime_job_id: session.runner_runtime_job_id,
-        runner_expires_at: session.runner_expires_at,
+        lease_epoch: session.lease_epoch,
+        active_lease_id: session.active_lease_id ?? null,
+        latest_turn_id: session.latest_turn_id ?? null,
+        latest_capsule_id: session.latest_capsule_id ?? null,
+        latest_capsule_digest: session.latest_capsule_digest ?? null,
+        ...(session.codex_thread_id_digest === undefined ? {} : { codex_thread_id_digest: session.codex_thread_id_digest }),
+        runner_worker_id: session.runner_worker_id ?? null,
+        runner_launch_lease_id: session.runner_launch_lease_id ?? null,
+        runner_runtime_job_id: session.runner_runtime_job_id ?? null,
+        runner_expires_at: session.runner_expires_at ?? null,
         updated_at: session.updated_at,
       }),
     ),
     active_lease: observed(input.active_lease, (lease) =>
-      optionalObject({
+      ({
         id: lease.id,
         session_id: lease.codex_session_id,
         status: lease.status,
+        lease_epoch: lease.lease_epoch,
+        worker_id: lease.worker_id,
         worker_session_digest: lease.worker_session_digest,
+        heartbeat_at: lease.heartbeat_at ?? null,
         expires_at: lease.expires_at,
         updated_at: lease.updated_at,
       }),
     ),
     pending_queued_action: observed(input.pending_queued_action, (action) =>
-      optionalObject({
+      ({
         id: action.id,
         workflow_id: action.workflow_id,
+        codex_session_id: action.codex_session_id,
         kind: action.kind,
         status: action.status,
         idempotency_key: action.idempotency_key,
@@ -285,30 +302,42 @@ export const buildSessionRecoveryCandidatePredicate = (
       }),
     ),
     latest_turn: observed(input.latest_turn, (turn) =>
-      optionalObject({
+      ({
         id: turn.id,
         session_id: turn.codex_session_id,
+        workflow_id: turn.workflow_id,
         status: turn.status,
-        input_capsule_digest: turn.input_capsule_digest,
-        output_capsule_digest: turn.output_capsule_digest,
+        input_digest: turn.input_digest,
+        input_capsule_digest: turn.input_capsule_digest ?? null,
+        output_capsule_digest: turn.output_capsule_digest ?? null,
+        runtime_job_id: turn.runtime_job_id ?? null,
         updated_at: turn.updated_at,
       }),
     ),
     runtime_job: observed(input.runtime_job, (job) =>
-      optionalObject({
+      ({
         id: job.id,
         session_id: job.session_id,
         status: job.status,
-        worker_session_digest: job.worker_session_digest,
+        terminal_status: job.terminal_status ?? null,
+        worker_id: job.worker_id,
+        launch_lease_id: job.launch_lease_id,
+        worker_session_digest: job.worker_session_digest ?? null,
+        expires_at: job.expires_at,
         updated_at: job.updated_at,
       }),
     ),
     run_session: observed(input.run_session, (runSession) =>
-      optionalObject({
+      ({
         id: runSession.id,
+        workflow_id: runSession.workflow_id ?? null,
+        codex_session_id: runSession.codex_session_id ?? null,
+        codex_session_turn_id: runSession.codex_session_turn_id ?? null,
         status: runSession.status,
-        input_capsule_digest: digestFromRuntimeMetadata(runSession, 'input_capsule_digest'),
-        output_capsule_digest: digestFromRuntimeMetadata(runSession, 'output_capsule_digest'),
+        remote_runtime_job_id: runSession.runtime_metadata?.remote_runtime_job_id ?? null,
+        remote_run_worker_lease_id: runSession.runtime_metadata?.remote_run_worker_lease_id ?? null,
+        input_capsule_digest: digestFromRuntimeMetadata(runSession, 'input_capsule_digest') ?? null,
+        output_capsule_digest: digestFromRuntimeMetadata(runSession, 'output_capsule_digest') ?? null,
         updated_at: runSession.updated_at,
       }),
     ),
@@ -446,13 +475,16 @@ export const redactOperatorSessionHealthProjection = (projection: PlanItemSessio
   });
 
 export const assertRecoveryPredicateStillMatches = (
-  currentProjection: Pick<PlanItemSessionHealth, 'codex_session_id' | 'state' | 'projection_digest'>,
+  currentProjection: Pick<PlanItemSessionHealth, 'codex_session_id' | 'state' | 'projection_digest' | 'candidate_predicate'>,
   predicate: SessionRecoveryCandidatePredicate,
 ): void => {
+  const freshPredicate = currentProjection.candidate_predicate;
   if (
+    freshPredicate === undefined ||
     predicate.codex_session_id !== currentProjection.codex_session_id ||
     predicate.expected_health_state !== currentProjection.state ||
-    predicate.projection_digest !== currentProjection.projection_digest
+    predicate.projection_digest !== currentProjection.projection_digest ||
+    sessionRecoveryProjectionDigest(freshPredicate) !== sessionRecoveryProjectionDigest(predicate)
   ) {
     throw new DomainError('session_operations_stale_candidate', 'session_operations_stale_candidate: recovery predicate no longer matches projection', {
       codex_session_id: currentProjection.codex_session_id,
@@ -689,29 +721,35 @@ const buildObservedFactsSnapshot = (
   retentionPins: readonly CapsuleRetentionPin[],
 ): Record<string, unknown> => ({
   workflow: observed(input.workflow, (workflow) =>
-    optionalObject({
+    ({
       id: workflow.id,
       development_plan_id: workflow.development_plan_id,
       development_plan_item_id: workflow.development_plan_item_id,
       status: workflow.status,
-      active_codex_session_id: workflow.active_codex_session_id,
+      active_codex_session_id: workflow.active_codex_session_id ?? null,
+      active_boundary_summary_revision_id: workflow.active_boundary_summary_revision_id ?? null,
+      active_spec_doc_revision_id: workflow.active_spec_doc_revision_id ?? null,
+      active_implementation_plan_doc_revision_id: workflow.active_implementation_plan_doc_revision_id ?? null,
+      execution_package_id: workflow.execution_package_id ?? null,
       updated_at: workflow.updated_at,
     }),
   ),
   session: observed(input.session, (session) =>
-    optionalObject({
+    ({
       id: session.id,
       owner_id: session.owner_id,
       status: session.status,
       role: session.role,
-      latest_capsule_id: session.latest_capsule_id,
-      latest_capsule_digest: session.latest_capsule_digest,
-      latest_turn_id: session.latest_turn_id,
-      active_lease_id: session.active_lease_id,
-      runner_worker_id: session.runner_worker_id,
-      runner_launch_lease_id: session.runner_launch_lease_id,
-      runner_runtime_job_id: session.runner_runtime_job_id,
-      runner_expires_at: session.runner_expires_at,
+      lease_epoch: session.lease_epoch,
+      latest_capsule_id: session.latest_capsule_id ?? null,
+      latest_capsule_digest: session.latest_capsule_digest ?? null,
+      latest_turn_id: session.latest_turn_id ?? null,
+      active_lease_id: session.active_lease_id ?? null,
+      codex_thread_id_digest: session.codex_thread_id_digest ?? null,
+      runner_worker_id: session.runner_worker_id ?? null,
+      runner_launch_lease_id: session.runner_launch_lease_id ?? null,
+      runner_runtime_job_id: session.runner_runtime_job_id ?? null,
+      runner_expires_at: session.runner_expires_at ?? null,
       updated_at: session.updated_at,
     }),
   ),
@@ -747,6 +785,7 @@ const buildObservedFactsSnapshot = (
       codex_session_id: turn.codex_session_id,
       workflow_id: turn.workflow_id,
       status: turn.status,
+      input_digest: turn.input_digest,
       input_capsule_id: turn.input_capsule_id,
       input_capsule_digest: turn.input_capsule_digest,
       output_capsule_id: turn.output_capsule_id,
@@ -756,24 +795,30 @@ const buildObservedFactsSnapshot = (
     }),
   ),
   runtime_job: observed(input.runtime_job, (job) =>
-    optionalObject({
+    ({
       id: job.id,
       session_id: job.session_id,
       status: job.status,
-      worker_session_digest: job.worker_session_digest,
+      terminal_status: job.terminal_status ?? null,
+      worker_id: job.worker_id,
+      launch_lease_id: job.launch_lease_id,
+      worker_session_digest: job.worker_session_digest ?? null,
+      expires_at: job.expires_at,
       updated_at: job.updated_at,
     }),
   ),
   run_session: observed(input.run_session, (runSession) =>
-    optionalObject({
+    ({
       id: runSession.id,
-      workflow_id: runSession.workflow_id,
-      codex_session_id: runSession.codex_session_id,
-      codex_session_turn_id: runSession.codex_session_turn_id,
+      workflow_id: runSession.workflow_id ?? null,
+      codex_session_id: runSession.codex_session_id ?? null,
+      codex_session_turn_id: runSession.codex_session_turn_id ?? null,
       status: runSession.status,
       updated_at: runSession.updated_at,
-      input_capsule_digest: digestFromRuntimeMetadata(runSession, 'input_capsule_digest'),
-      output_capsule_digest: digestFromRuntimeMetadata(runSession, 'output_capsule_digest'),
+      remote_runtime_job_id: runSession.runtime_metadata?.remote_runtime_job_id ?? null,
+      remote_run_worker_lease_id: runSession.runtime_metadata?.remote_run_worker_lease_id ?? null,
+      input_capsule_digest: digestFromRuntimeMetadata(runSession, 'input_capsule_digest') ?? null,
+      output_capsule_digest: digestFromRuntimeMetadata(runSession, 'output_capsule_digest') ?? null,
     }),
   ),
   latest_capsule: observed(input.latest_capsule, (capsule) =>
