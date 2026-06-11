@@ -295,13 +295,12 @@ export class SessionOperationsService {
             target_after_state: existing.after_state,
             target_result: existing.result,
           })) {
-            const { record } = await this.recordBlockedScavengeConflict(
+            return this.blockedScavengeConflictDto(
               lockedRepository,
               scavengeRecoverBody,
               actorId,
               operationKey,
             );
-            return this.redactSessionRecoveryRecordDto(record);
           }
           return this.redactSessionRecoveryRecordDto(existing);
         }
@@ -783,33 +782,44 @@ export class SessionOperationsService {
     return repository.createOrReplaySessionRecoveryRecord(record);
   }
 
-  private async recordBlockedScavengeConflict(
+  private async blockedScavengeConflictDto(
     repository: DeliveryRepository,
     body: RecoverSessionRequestDto,
     actorId: string,
     operationKey: string,
-  ) {
+  ): Promise<SessionRecoveryRecordDto> {
     const before = await this.buildProjectionForSession(body.candidate_predicate.codex_session_id, {
       persist: false,
       repository,
       checkedAt: body.candidate_predicate.observed_at,
     });
-    const conflictOperationKey = `${operationKey}:conflict:${codexCanonicalDigest({
-      reason: body.reason,
-      operation: body.operation,
-      predicate_summary: this.predicateSummary(body.candidate_predicate),
-    })}`;
-    return this.recordRecovery(repository, {
-      before,
-      after: before,
-      body: { ...body, operation_idempotency_key: conflictOperationKey },
-      actorId,
-      operationKey: conflictOperationKey,
-      auditOperation: 'scavenge',
+    return {
+      id: codexCanonicalDigest({
+        kind: 'session_recovery_idempotency_conflict_response',
+        operation_idempotency_key: operationKey,
+        reason: body.reason,
+        predicate_summary: this.predicateSummary(body.candidate_predicate),
+      }),
+      codex_session_id: this.requireProjectionCodexSessionId(before),
+      operation: 'scavenge',
       result: 'blocked',
       result_code: 'idempotency_conflict',
-      affected: {},
-    });
+      reason: body.reason,
+      actor_id: actorId,
+      operation_idempotency_key: operationKey,
+      before_state: before.state,
+      after_state: before.state,
+      before_projection_digest: before.projection_digest,
+      after_projection_digest: before.projection_digest,
+      affected_lease_ids: [],
+      affected_queued_action_ids: [],
+      affected_turn_ids: [],
+      affected_runtime_job_ids: [],
+      affected_run_session_ids: [],
+      affected_capsule_ids: [],
+      predicate_summary: this.predicateSummary(body.candidate_predicate),
+      created_at: nowIso(),
+    };
   }
 
   private async appendRecoveryObjectEvent(

@@ -609,7 +609,7 @@ describe('session operations API', () => {
     expect(runSession?.status).toBe('failed');
   });
 
-  it('audits scavenge idempotency conflicts per candidate without changing recovered state', async () => {
+  it('reports scavenge idempotency conflicts per candidate without mutating recovery records', async () => {
     const seeded = await seedBlockedStaleLeaseCandidate('88888910');
     apps.push(seeded.app);
     const operationKey = `scavenge-conflict:${seeded.sessionId}:${seeded.predicate.projection_digest}`;
@@ -641,19 +641,12 @@ describe('session operations API', () => {
 
     expect(response.body.results).toHaveLength(1);
     expect(response.body.results[0]).toMatchObject({
-      operation_idempotency_key: expect.stringContaining(`${operationKey}:conflict:`),
+      operation_idempotency_key: operationKey,
       result: 'blocked',
       result_code: 'idempotency_conflict',
     });
     const afterRecords = await seeded.repository.listSessionRecoveryRecords({ codex_session_id: seeded.sessionId });
-    expect(afterRecords).toHaveLength(beforeRecords.length + 1);
-    const conflictRecord = afterRecords.find((record) => record.result_code === 'idempotency_conflict');
-    expect(conflictRecord).toMatchObject({
-      result: 'blocked',
-      result_code: 'idempotency_conflict',
-      before_state: 'recovered',
-      after_state: 'recovered',
-    });
+    expect(afterRecords).toHaveLength(beforeRecords.length);
   });
 
   it('scavenge execute writes per-candidate records without comparing derived key to candidate key', async () => {
