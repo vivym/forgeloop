@@ -676,8 +676,6 @@ export const defaultProductApiResponses: ProductApiResponseMap = {
   [`GET /plan-items/${developmentPlanItem.id}/session-diagnostics`]: {
     plan_item_id: developmentPlanItem.id,
     workflow_resolution: 'active_workflow',
-    workflow_id: 'workflow-product-workspace-preview',
-    codex_session_id: 'session-product-workspace-preview',
     state: 'healthy',
     severity: 'none',
     summary: 'Session control state is healthy.',

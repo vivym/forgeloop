@@ -72,7 +72,6 @@ function ConnectedSessionOperationsDashboard() {
   const healthFilters = useMemo(
     () => ({
       ...buildSessionOperationsFilters(stateFilter, scopeFilters),
-      candidate_only: true,
       include_recovered: true,
       include_unrecoverable: true,
     }),

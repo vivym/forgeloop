@@ -228,6 +228,40 @@ describe('session operations dashboard route', () => {
 
     queryClient.clear();
   });
+
+  it('loads the operator dashboard without candidate-only filtering so recovered sessions remain visible', async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = new URL(String(input));
+      if (url.pathname === '/session-operations/health') {
+        return new Response(JSON.stringify({ items: [], filters: Object.fromEntries(url.searchParams.entries()) }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
+      }
+
+      return new Response(JSON.stringify({ items: [] }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const wrapper = ({ children }: { children: ReactNode }) => (
+      <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+    );
+
+    render(<SessionOperationsDashboardRoute />, { wrapper });
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        'http://localhost:3000/session-operations/health?include_recovered=true&include_unrecoverable=true',
+        expect.objectContaining({ method: 'GET' }),
+      );
+    });
+    expect(fetchMock.mock.calls.map(([input]) => String(input)).join('\n')).not.toContain('candidate_only=true');
+
+    queryClient.clear();
+  });
 });
 
 function recoveryRecordFixture() {

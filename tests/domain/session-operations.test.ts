@@ -314,11 +314,11 @@ describe('session operations domain helpers', () => {
     });
     expect(diagnostics).toMatchObject({
       workflow_resolution: 'no_active_workflow',
-      codex_session_id: 'session-1',
       normal_workflow_actions_available: false,
       recovery_request_available: false,
     });
     expect(diagnostics).not.toHaveProperty('workflow_id');
+    expect(diagnostics).not.toHaveProperty('codex_session_id');
   });
 
   it('preserves explicit ambiguous workflow resolution in public diagnostics', () => {
@@ -627,11 +627,11 @@ describe('session operations domain helpers', () => {
     expect(planItemSessionDiagnosticsSchema.parse(diagnostics)).toMatchObject({
       plan_item_id: 'plan-item-1',
       workflow_resolution: 'active_workflow',
-      workflow_id: 'workflow-1',
-      codex_session_id: 'session-1',
       state: 'blocked_stale_lease',
       recovery_request_available: true,
     });
+    expect(diagnostics).not.toHaveProperty('workflow_id');
+    expect(diagnostics).not.toHaveProperty('codex_session_id');
     const text = collectText(diagnostics);
     expect(text).not.toContain('candidate_predicate');
     expect(text).not.toContain('worker_session_digest');

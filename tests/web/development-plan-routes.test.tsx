@@ -371,8 +371,6 @@ describe('Development Plan routes', () => {
         [`GET /plan-items/${developmentPlanItem.id}/session-diagnostics`]: {
           plan_item_id: developmentPlanItem.id,
           workflow_resolution: 'active_workflow',
-          workflow_id: 'workflow-1',
-          codex_session_id: 'session-1',
           state: 'blocked_stale_lease',
           severity: 'blocked',
           summary: 'Operator recovery is required before the workflow can continue.',
@@ -397,8 +395,6 @@ describe('Development Plan routes', () => {
         [`GET /plan-items/${developmentPlanItem.id}/session-diagnostics`]: {
           plan_item_id: developmentPlanItem.id,
           workflow_resolution: 'active_workflow',
-          workflow_id: 'workflow-1',
-          codex_session_id: 'session-1',
           state: 'recovered',
           severity: 'info',
           summary: 'Control state recovered. Choose a separate product action before continuing.',

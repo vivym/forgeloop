@@ -456,8 +456,6 @@ describe('session operations contracts', () => {
     const diagnostics = {
       plan_item_id: 'plan-item-1',
       workflow_resolution: 'active_workflow',
-      workflow_id: 'workflow-1',
-      codex_session_id: 'session-1',
       state: 'blocked_stale_lease',
       severity: 'blocked',
       summary: 'The active session lease is stale.',
@@ -478,6 +476,8 @@ describe('session operations contracts', () => {
     });
 
     for (const forbidden of [
+      ['workflow_id', 'workflow-1'],
+      ['codex_session_id', 'session-1'],
       ['candidate_predicate', candidatePredicate],
       ['worker_session_digest', digest('9')],
       ['operation_idempotency_key', 'recover:session-1:predicate-1'],
@@ -988,6 +988,18 @@ describe('session operations contracts', () => {
     } as const;
 
     expect(planItemSessionDiagnosticsSchema.parse(diagnostics)).toEqual(diagnostics);
+
+    for (const rawIdentifier of [
+      ['workflow_id', 'workflow-1'],
+      ['codex_session_id', 'session-1'],
+    ] as const) {
+      expect(
+        planItemSessionDiagnosticsSchema.safeParse({
+          ...diagnostics,
+          [rawIdentifier[0]]: rawIdentifier[1],
+        }).success,
+      ).toBe(false);
+    }
 
     for (const forbidden of [
       ['candidate_predicate', candidatePredicate],

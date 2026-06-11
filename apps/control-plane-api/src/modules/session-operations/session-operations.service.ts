@@ -111,7 +111,6 @@ export class SessionOperationsService {
       return {
         plan_item_id: planItemId,
         workflow_resolution: 'no_active_workflow',
-        workflow_id: workflow.id,
         summary: 'The active Plan Item workflow does not have an active Codex session.',
         operator_intervention_required: true,
         normal_workflow_actions_available: false,

@@ -437,8 +437,6 @@ export const redactPlanItemSessionDiagnostics = (projection: PlanItemSessionHeal
   optionalObject({
     plan_item_id: projection.development_plan_item_id ?? projection.diagnostics?.plan_item_id ?? requirePlanItemId(projection),
     workflow_resolution: projection.diagnostics?.workflow_resolution ?? (projection.workflow_id === undefined ? 'no_active_workflow' : 'active_workflow'),
-    workflow_id: projection.workflow_id,
-    codex_session_id: projection.codex_session_id,
     state: projection.state,
     severity: projection.severity,
     summary: projection.summary,

@@ -39,6 +39,8 @@ describe('session operations API', () => {
       .expect(200);
 
     expect(response.body.workflow_resolution).toBe('active_workflow');
+    expect(response.body).not.toHaveProperty('workflow_id');
+    expect(response.body).not.toHaveProperty('codex_session_id');
     expect(JSON.stringify(response.body)).not.toContain('candidate_predicate');
     expect(JSON.stringify(response.body)).not.toContain('worker_session_digest');
     expect(JSON.stringify(response.body)).not.toContain('codex_thread_id');
@@ -56,6 +58,31 @@ describe('session operations API', () => {
 
     expect(response.body.workflow_resolution).toBe('no_active_workflow');
     expect(response.body.normal_workflow_actions_available).toBe(false);
+    expect(response.body).not.toHaveProperty('workflow_id');
+    expect(response.body).not.toHaveProperty('codex_session_id');
+  });
+
+  it('returns redacted no-active-session diagnostics when an active workflow has no active Codex session', async () => {
+    const { app, repository } = await createSessionOperationsTestApp();
+    apps.push(app);
+    const seeded = await seedDevelopmentPlanItem(app, { idPrefix: '88888924' });
+    await startWorkflow(app, seeded.plan.id, seeded.item.id);
+    const workflow = await repository.getActivePlanItemWorkflowByItem(seeded.item.id);
+    if (workflow === undefined) {
+      throw new Error('Expected active workflow');
+    }
+    const repositoryInternals = repository as unknown as { planItemWorkflows: Map<string, Record<string, unknown>> };
+    repositoryInternals.planItemWorkflows.set(workflow.id, { ...workflow, active_codex_session_id: undefined });
+
+    const response = await request(app.getHttpServer())
+      .get(`/plan-items/${seeded.item.id}/session-diagnostics`)
+      .set(signedDeveloperHeaders(seeded.ids.actorTech))
+      .expect(200);
+
+    expect(response.body.workflow_resolution).toBe('no_active_workflow');
+    expect(response.body.normal_workflow_actions_available).toBe(false);
+    expect(response.body).not.toHaveProperty('workflow_id');
+    expect(response.body).not.toHaveProperty('codex_session_id');
   });
 
   it('fails closed when Plan Item workflow resolution is ambiguous', async () => {
@@ -202,6 +229,8 @@ describe('session operations API', () => {
       .set(signedDeveloperHeaders(seeded.actorId))
       .expect(200);
     expect(diagnostics.body.normal_workflow_actions_available).toBe(false);
+    expect(diagnostics.body).not.toHaveProperty('workflow_id');
+    expect(diagnostics.body).not.toHaveProperty('codex_session_id');
   });
 
   it('rejects stale lease recovery when runner owner changes after candidate capture', async () => {
@@ -354,6 +383,8 @@ describe('session operations API', () => {
       .expect(200);
     expect(diagnostics.body.state).toBe('recovered');
     expect(diagnostics.body.normal_workflow_actions_available).toBe(false);
+    expect(diagnostics.body).not.toHaveProperty('workflow_id');
+    expect(diagnostics.body).not.toHaveProperty('codex_session_id');
   });
 
   it('lists safe recovery audit records for an operator-scoped session', async () => {

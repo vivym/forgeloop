@@ -206,8 +206,6 @@ export const planItemSessionDiagnosticsSchema = z
   .object({
     plan_item_id: nonEmpty,
     workflow_resolution: z.enum(['active_workflow', 'no_active_workflow', 'ambiguous_workflows']),
-    workflow_id: nonEmpty.optional(),
-    codex_session_id: nonEmpty.optional(),
     state: planItemSessionHealthStateSchema.optional(),
     severity: planItemSessionHealthSeveritySchema.optional(),
     summary: nonEmpty,
