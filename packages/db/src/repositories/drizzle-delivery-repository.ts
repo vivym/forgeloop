@@ -3052,6 +3052,118 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
     );
   }
 
+  async releaseStaleCodexSessionLeaseForSessionOperations(input: {
+    session_id: string;
+    workflow_id: string;
+    lease_id: string;
+    now: string;
+  }): Promise<{ session: CodexSession; lease: CodexSessionLease }> {
+    return this.withObjectLock(`codex-session:${input.session_id}`, async (repository) =>
+      (repository as DrizzleDeliveryRepository).releaseStaleCodexSessionLeaseForSessionOperationsUnlocked(input),
+    );
+  }
+
+  private async releaseStaleCodexSessionLeaseForSessionOperationsUnlocked(input: {
+    session_id: string;
+    workflow_id: string;
+    lease_id: string;
+    now: string;
+  }): Promise<{ session: CodexSession; lease: CodexSessionLease }> {
+    const session = await this.getCodexSession(input.session_id);
+    const workflow = session === undefined ? undefined : await this.getPlanItemWorkflow(session.owner_id);
+    const lease = await this.getCodexSessionLease(input.lease_id);
+    if (
+      session === undefined ||
+      workflow === undefined ||
+      lease === undefined ||
+      session.owner_type !== 'plan_item_workflow' ||
+      session.owner_id !== input.workflow_id ||
+      workflow.id !== input.workflow_id ||
+      workflow.active_codex_session_id !== session.id ||
+      session.active_lease_id !== lease.id ||
+      lease.codex_session_id !== session.id ||
+      lease.status !== 'active' ||
+      lease.expires_at > input.now
+    ) {
+      throw new DomainError(
+        'codex_session_lease_conflict',
+        `codex_session_lease_conflict: Codex session lease ${input.lease_id} cannot be released by session operations`,
+      );
+    }
+    const fencedLease: CodexSessionLease = { ...lease, status: 'fenced', fenced_at: input.now, updated_at: input.now };
+    const { active_lease_id: _activeLeaseId, ...sessionWithoutActiveLease } = session;
+    const shouldClearRunner =
+      session.runner_worker_id === lease.worker_id ||
+      session.runner_launch_lease_id === lease.id ||
+      (session.runner_expires_at !== undefined && session.runner_expires_at <= input.now);
+    const recoveredSession: CodexSession = shouldClearRunner
+      ? {
+          ...sessionWithoutActiveLease,
+          runner_worker_id: undefined,
+          runner_launch_lease_id: undefined,
+          runner_runtime_job_id: undefined,
+          runner_expires_at: undefined,
+          status: 'recovering',
+          updated_at: input.now,
+        }
+      : { ...sessionWithoutActiveLease, status: 'recovering', updated_at: input.now };
+    await this.db.update(codex_session_leases).set(toDbRecord(fencedLease, codex_session_leases) as never).where(eq(codex_session_leases.id, lease.id));
+    await this.db.update(codex_sessions).set(toDbRecord(recoveredSession, codex_sessions) as never).where(eq(codex_sessions.id, session.id));
+    return { session: recoveredSession, lease: fencedLease };
+  }
+
+  async stalePlanItemWorkflowQueuedActionForSessionOperations(input: {
+    workflow_id: string;
+    action_id: string;
+    reason: string;
+    now: string;
+  }): Promise<PlanItemWorkflowQueuedAction> {
+    const [updated] = await this.db
+      .update(plan_item_workflow_queued_actions)
+      .set({ status: 'stale', blockedReasonCode: input.reason, updatedAt: input.now } as never)
+      .where(
+        and(
+          eq(plan_item_workflow_queued_actions.id, input.action_id),
+          eq(plan_item_workflow_queued_actions.workflowId, input.workflow_id),
+          inArray(plan_item_workflow_queued_actions.status, ['queued', 'running']),
+        ),
+      )
+      .returning();
+    if (updated === undefined) {
+      throw new DomainError(
+        'workflow_action_not_runnable',
+        `workflow_action_not_runnable: Plan Item Workflow queued action ${input.action_id} cannot be marked stale by session operations`,
+      );
+    }
+    return fromDbRecord<PlanItemWorkflowQueuedAction>(updated);
+  }
+
+  async terminalizeCodexRuntimeJobForSessionOperations(input: {
+    runtime_job_id: string;
+    terminal_status: NonNullable<CodexRuntimeJob['terminal_status']>;
+    reason_code: string;
+    now: string;
+  }): Promise<CodexRuntimeJob> {
+    const [updated] = await this.db
+      .update(codex_runtime_jobs)
+      .set({
+        status: 'terminal',
+        terminalStatus: input.terminal_status,
+        terminalReasonCode: input.reason_code,
+        terminalAt: input.now,
+        updatedAt: input.now,
+      } as never)
+      .where(and(eq(codex_runtime_jobs.id, input.runtime_job_id), notInArray(codex_runtime_jobs.status, ['terminal'])))
+      .returning();
+    if (updated === undefined) {
+      throw new DomainError(
+        'codex_runtime_job_unavailable',
+        `codex_runtime_job_unavailable: Codex runtime job ${input.runtime_job_id} cannot be terminalized by session operations`,
+      );
+    }
+    return fromDbRecord<CodexRuntimeJob>(updated);
+  }
+
   private async recoverCodexSessionLeaseForClaimUnlocked(
     input: RecoverCodexSessionLeaseForClaimInput,
   ): Promise<{ session: CodexSession; lease: CodexSessionLease }> {
@@ -12332,6 +12444,8 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
       operation: row.operation,
       actor_id: row.actorId,
       codex_session_id: row.codexSessionId,
+      workflow_id: row.workflowId,
+      development_plan_item_id: row.developmentPlanItemId,
       reason: row.reason,
       before_state: row.beforeState,
       after_state: row.afterState,
@@ -12354,11 +12468,21 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
   private async sessionRecoveryPersistenceIdentity(
     record: SessionRecoveryRecord,
   ): Promise<{ workflow_id: string; development_plan_item_id: string }> {
-    const predicate = record.predicate_summary;
-    if ('workflow' in predicate && predicate.workflow.state === 'present') {
+    if (record.workflow_id !== undefined && record.development_plan_item_id !== undefined) {
+      const workflow = await this.getPlanItemWorkflow(record.workflow_id);
+      if (
+        workflow === undefined ||
+        workflow.status === 'archived' ||
+        workflow.development_plan_item_id !== record.development_plan_item_id
+      ) {
+        throw new DomainError(
+          'session_operations_no_active_workflow',
+          'session_operations_no_active_workflow: recovery record requires an active workflow identity',
+        );
+      }
       return {
-        workflow_id: predicate.workflow_id,
-        development_plan_item_id: predicate.workflow.value.development_plan_item_id,
+        workflow_id: workflow.id,
+        development_plan_item_id: workflow.development_plan_item_id,
       };
     }
     const session = await this.getCodexSession(record.codex_session_id);
@@ -12369,7 +12493,13 @@ export class DrizzleDeliveryRepository implements DeliveryRepository {
       );
     }
     const workflow = await this.getPlanItemWorkflow(session.owner_id);
-    if (workflow === undefined || workflow.active_codex_session_id !== session.id || workflow.status === 'archived') {
+    if (
+      workflow === undefined ||
+      workflow.active_codex_session_id !== session.id ||
+      workflow.status === 'archived' ||
+      (record.workflow_id !== undefined && workflow.id !== record.workflow_id) ||
+      (record.development_plan_item_id !== undefined && workflow.development_plan_item_id !== record.development_plan_item_id)
+    ) {
       throw new DomainError(
         'session_operations_no_active_workflow',
         'session_operations_no_active_workflow: recovery record requires an active workflow identity',

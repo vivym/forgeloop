@@ -8,6 +8,7 @@ import { InternalArtifactsModule } from './modules/internal-artifacts/internal-a
 import { PlanItemWorkflowsModule } from './modules/plan-item-workflows/plan-item-workflows.module';
 import { QueryModule } from './modules/query/query.module';
 import { ReleaseModule } from './modules/release/release.module';
+import { SessionOperationsModule } from './modules/session-operations/session-operations.module';
 
 @Module({
   imports: [
@@ -19,6 +20,7 @@ import { ReleaseModule } from './modules/release/release.module';
     CodexRuntimeModule,
     InternalArtifactsModule,
     PlanItemWorkflowsModule,
+    SessionOperationsModule,
   ],
 })
 export class AppModule {}

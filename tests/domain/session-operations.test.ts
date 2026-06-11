@@ -195,7 +195,7 @@ describe('session operations domain helpers', () => {
       severity: 'blocked',
       reason_code: 'stale_lease',
       recovery_available: true,
-      recovery_operation_labels: ['recover', 'mark_unrecoverable'],
+      recovery_operation_labels: ['recover'],
       operator_intervention_required: true,
       normal_workflow_actions_available: false,
       lineage_risk: false,
@@ -244,23 +244,41 @@ describe('session operations domain helpers', () => {
     expect(collectText(operator)).not.toContain('secret=abc123');
   });
 
-  it('missing active session or workflow/session mismatch projects blocked_lineage_conflict fail-closed', () => {
-    for (const input of [
+  it('missing active session projects blocked_lineage_conflict fail-closed without recovery', () => {
+    const projection = buildSessionHealthProjection(
       baseInput({ session: undefined, latest_capsule: undefined, active_lease: undefined }),
-      baseInput({ workflow: workflow({ active_codex_session_id: 'session-other' }) }),
-    ]) {
-      const projection = buildSessionHealthProjection(input);
+    );
 
-      expect(projection).toMatchObject({
-        state: 'blocked_lineage_conflict',
-        severity: 'critical',
-        reason_code: 'lineage_conflict',
-        recovery_available: false,
-        operator_intervention_required: true,
-        normal_workflow_actions_available: false,
-        lineage_risk: true,
-      });
-    }
+    expect(projection).toMatchObject({
+      state: 'blocked_lineage_conflict',
+      severity: 'critical',
+      reason_code: 'lineage_conflict',
+      recovery_available: false,
+      operator_intervention_required: true,
+      normal_workflow_actions_available: false,
+      lineage_risk: true,
+    });
+  });
+
+  it('workflow/session mismatch emits a fenced mark-unrecoverable lineage candidate', () => {
+    const projection = buildSessionHealthProjection(
+      baseInput({ workflow: workflow({ active_codex_session_id: 'session-other' }) }),
+    );
+
+    expect(projection).toMatchObject({
+      state: 'blocked_lineage_conflict',
+      severity: 'critical',
+      reason_code: 'lineage_conflict',
+      recovery_available: true,
+      recovery_operation_labels: ['mark_unrecoverable'],
+      operator_intervention_required: true,
+      normal_workflow_actions_available: false,
+      lineage_risk: true,
+    });
+    expect(sessionRecoveryCandidatePredicateSchema.parse(projection.candidate_predicate)).toMatchObject({
+      expected_health_state: 'blocked_lineage_conflict',
+      projection_digest: projection.projection_digest,
+    });
   });
 
   it('missing workflow with present session does not throw and fail-closes lineage', () => {
@@ -355,9 +373,14 @@ describe('session operations domain helpers', () => {
         state: 'blocked_missing_capsule',
         severity: 'blocked',
         reason_code: 'missing_capsule',
-        recovery_available: false,
+        recovery_available: true,
+        recovery_operation_labels: ['mark_unrecoverable'],
         operator_intervention_required: true,
         normal_workflow_actions_available: false,
+      });
+      expect(sessionRecoveryCandidatePredicateSchema.parse(projection.candidate_predicate)).toMatchObject({
+        expected_health_state: 'blocked_missing_capsule',
+        projection_digest: projection.projection_digest,
       });
     }
   });
@@ -401,6 +424,31 @@ describe('session operations domain helpers', () => {
     });
     expect(projection.candidate_predicate?.runtime_job).toMatchObject({ state: 'present' });
     expect(projection.candidate_predicate?.run_session).toMatchObject({ state: 'absent' });
+  });
+
+  it('runtime job and run session without active lease projects blocked_orphaned_action', () => {
+    const projection = buildSessionHealthProjection(
+      baseInput({
+        active_lease: undefined,
+        runtime_job: {
+          id: 'runtime-job-1',
+          session_id: 'session-1',
+          status: 'running',
+          worker_session_digest: digest('5'),
+          updated_at: earlier,
+        },
+        run_session: runSession({ status: 'running' }),
+      }),
+    );
+
+    expect(projection).toMatchObject({
+      state: 'blocked_orphaned_action',
+      severity: 'blocked',
+      reason_code: 'orphaned_action',
+      recovery_available: true,
+    });
+    expect(projection.candidate_predicate?.runtime_job).toMatchObject({ state: 'present' });
+    expect(projection.candidate_predicate?.run_session).toMatchObject({ state: 'present' });
   });
 
   it('buildCapsuleRetentionPins derives structured merged pins from product references', () => {

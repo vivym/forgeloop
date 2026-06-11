@@ -106,6 +106,8 @@ export interface BuildSessionHealthProjectionInput {
 
 export interface SessionRecoveryRecord extends Omit<SessionRecoveryRecordDto, 'predicate_summary'> {
   predicate_summary: SessionRecoveryCandidatePredicate | SessionRecoveryRecordDto['predicate_summary'];
+  workflow_id?: string;
+  development_plan_item_id?: string;
 }
 
 export type ListSessionHealthProjectionsQuery = SessionOperationsHealthQuery;
@@ -121,17 +123,23 @@ export type ListSessionRecoveryRecordsQuery = {
 };
 
 export interface RecoveryRequestIdentityInput {
-  operation: RecoverSessionRequest['operation'];
+  operation: RecoverSessionRequest['operation'] | 'scavenge';
   reason: string;
   operation_idempotency_key: string;
   candidate_predicate: SessionRecoveryCandidatePredicate;
+  codex_session_id?: string;
   target_after_state?: PlanItemSessionHealthState;
   target_result?: SessionRecoveryResult;
 }
 
 type PinReason = CapsuleProductReference['kind'] | 'active_session_latest' | 'recovery_record' | 'object_event' | 'unrecoverable_evidence';
 
-const recoveryStates = new Set<PlanItemSessionHealthState>(['blocked_stale_lease', 'blocked_orphaned_action']);
+const recoveryStates = new Set<PlanItemSessionHealthState>([
+  'blocked_stale_lease',
+  'blocked_orphaned_action',
+  'blocked_missing_capsule',
+  'blocked_lineage_conflict',
+]);
 const notCleanableReasons = new Set<PinReason>(['recovery_record', 'unrecoverable_evidence']);
 
 export const sessionRecoveryProjectionDigest = (value: unknown): string => codexCanonicalDigest(value);
@@ -149,7 +157,8 @@ export const buildSessionHealthProjection = (input: BuildSessionHealthProjection
   const lineageRisk = state === 'blocked_lineage_conflict';
   const workflowResolution = input.workflow_resolution ?? (input.workflow === undefined ? 'no_active_workflow' : 'active_workflow');
   const hasActiveWorkflowResolution = workflowResolution === 'active_workflow';
-  const recoveryAvailable = hasActiveWorkflowResolution && recoveryStates.has(state);
+  const hasConcreteRecoveryTarget = input.workflow !== undefined && input.session !== undefined && codexSessionId !== undefined;
+  const recoveryAvailable = hasActiveWorkflowResolution && hasConcreteRecoveryTarget && recoveryStates.has(state);
   const operatorInterventionRequired = !hasActiveWorkflowResolution || (state !== 'healthy' && state !== 'recovered');
   const normalWorkflowActionsAvailable = hasActiveWorkflowResolution && (state === 'healthy' || state === 'attention_needed');
   const base = optionalObject<PlanItemSessionHealthCore>({
@@ -163,7 +172,7 @@ export const buildSessionHealthProjection = (input: BuildSessionHealthProjection
     projection_digest: '',
     checked_at: input.checked_at,
     recovery_available: recoveryAvailable,
-    recovery_operation_labels: recoveryAvailable ? ['recover', 'mark_unrecoverable'] : [],
+    recovery_operation_labels: recoveryOperationLabelsForState(state, recoveryAvailable),
     operator_intervention_required: operatorInterventionRequired,
     normal_workflow_actions_available: normalWorkflowActionsAvailable,
     retention_risk: retentionRisk,
@@ -246,6 +255,10 @@ export const buildSessionRecoveryCandidatePredicate = (
         role: session.role,
         worker_session_digest: undefined,
         codex_thread_id_digest: session.codex_thread_id_digest,
+        runner_worker_id: session.runner_worker_id,
+        runner_launch_lease_id: session.runner_launch_lease_id,
+        runner_runtime_job_id: session.runner_runtime_job_id,
+        runner_expires_at: session.runner_expires_at,
         updated_at: session.updated_at,
       }),
     ),
@@ -458,7 +471,7 @@ export const recoveryRequestMatchesExistingRecord = (
   }
   return (
     existing.reason === incoming.reason &&
-    existing.codex_session_id === incoming.candidate_predicate.codex_session_id &&
+    existing.codex_session_id === (incoming.codex_session_id ?? incoming.candidate_predicate.codex_session_id) &&
     existing.operation === incoming.operation &&
     existing.result === (incoming.target_result ?? 'applied') &&
     existing.after_state === (incoming.target_after_state ?? targetAfterStateForOperation(incoming.operation)) &&
@@ -513,6 +526,9 @@ const deriveState = (input: BuildSessionHealthProjectionInput): PlanItemSessionH
   if (input.runtime_job !== undefined && input.run_session === undefined) {
     return 'blocked_orphaned_action';
   }
+  if (input.runtime_job !== undefined && input.run_session !== undefined && input.active_lease === undefined) {
+    return 'blocked_orphaned_action';
+  }
   if (input.stale_projection_reason !== undefined) {
     return 'attention_needed';
   }
@@ -536,6 +552,19 @@ const severityForState = (state: PlanItemSessionHealthState): PlanItemSessionHea
     case 'unrecoverable':
       return 'critical';
   }
+};
+
+const recoveryOperationLabelsForState = (
+  state: PlanItemSessionHealthState,
+  recoveryAvailable: boolean,
+): PlanItemSessionHealthCore['recovery_operation_labels'] => {
+  if (!recoveryAvailable) {
+    return [];
+  }
+  if (state === 'blocked_missing_capsule' || state === 'blocked_lineage_conflict') {
+    return ['mark_unrecoverable'];
+  }
+  return ['recover'];
 };
 
 const reasonCodeForState = (state: PlanItemSessionHealthState, input: BuildSessionHealthProjectionInput): string | undefined => {
@@ -679,6 +708,10 @@ const buildObservedFactsSnapshot = (
       latest_capsule_digest: session.latest_capsule_digest,
       latest_turn_id: session.latest_turn_id,
       active_lease_id: session.active_lease_id,
+      runner_worker_id: session.runner_worker_id,
+      runner_launch_lease_id: session.runner_launch_lease_id,
+      runner_runtime_job_id: session.runner_runtime_job_id,
+      runner_expires_at: session.runner_expires_at,
       updated_at: session.updated_at,
     }),
   ),
@@ -818,7 +851,7 @@ const requireCodexSessionId = (projection: Pick<PlanItemSessionHealth, 'codex_se
   return projection.codex_session_id;
 };
 
-const targetAfterStateForOperation = (operation: RecoverSessionRequest['operation']): PlanItemSessionHealthState =>
+const targetAfterStateForOperation = (operation: RecoveryRequestIdentityInput['operation']): PlanItemSessionHealthState =>
   operation === 'mark_unrecoverable' ? 'unrecoverable' : 'recovered';
 
 const compareCodeUnits = (left: string, right: string): number => (left < right ? -1 : left > right ? 1 : 0);

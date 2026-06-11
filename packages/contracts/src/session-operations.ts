@@ -97,6 +97,10 @@ const sessionPredicateValueShape = {
   role: codexSessionRoleSchema,
   worker_session_digest: safeDigestSchema.optional(),
   codex_thread_id_digest: safeDigestSchema.optional(),
+  runner_worker_id: nonEmpty.optional(),
+  runner_launch_lease_id: nonEmpty.optional(),
+  runner_runtime_job_id: nonEmpty.optional(),
+  runner_expires_at: isoDateTimeSchema.optional(),
   updated_at: isoDateTimeSchema.optional(),
 } satisfies z.ZodRawShape;
 

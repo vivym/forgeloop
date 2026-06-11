@@ -5190,6 +5190,10 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
   }
 
   async claimCodexSessionLease(input: ClaimCodexSessionLeaseInput): Promise<{ session: CodexSession; lease: CodexSessionLease }> {
+    return this.withObjectLock(`codex-session:${input.session_id}`, () => this.claimCodexSessionLeaseUnlocked(input));
+  }
+
+  private async claimCodexSessionLeaseUnlocked(input: ClaimCodexSessionLeaseInput): Promise<{ session: CodexSession; lease: CodexSessionLease }> {
     if (this.codexSessionLeases.has(input.lease_id)) {
       throw new DomainError('codex_session_lease_conflict', `codex_session_lease_conflict: Codex session lease ${input.lease_id} is not unique`);
     }
@@ -5292,10 +5296,7 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
       fenced_at: input.now,
       updated_at: input.now,
     };
-    const {
-      active_lease_id: _activeLeaseId,
-      ...sessionWithoutActiveLease
-    } = clone(session);
+    const { active_lease_id: _activeLeaseId, ...sessionWithoutActiveLease } = clone(session);
     const recoveredSession: CodexSession = {
       ...sessionWithoutActiveLease,
       status: 'recovering',
@@ -5304,6 +5305,124 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
     this.codexSessionLeases.set(fencedLease.id, clone(fencedLease));
     this.codexSessions.set(recoveredSession.id, clone(recoveredSession));
     return { session: clone(recoveredSession), lease: clone(fencedLease) };
+  }
+
+  async releaseStaleCodexSessionLeaseForSessionOperations(input: {
+    session_id: string;
+    workflow_id: string;
+    lease_id: string;
+    now: string;
+  }): Promise<{ session: CodexSession; lease: CodexSessionLease }> {
+    const session = this.codexSessions.get(input.session_id);
+    const workflow = session === undefined ? undefined : this.planItemWorkflows.get(session.owner_id);
+    const lease = this.codexSessionLeases.get(input.lease_id);
+    if (
+      session === undefined ||
+      workflow === undefined ||
+      lease === undefined ||
+      session.owner_type !== 'plan_item_workflow' ||
+      session.owner_id !== input.workflow_id ||
+      workflow.id !== input.workflow_id ||
+      workflow.active_codex_session_id !== session.id ||
+      session.active_lease_id !== lease.id ||
+      lease.codex_session_id !== session.id ||
+      lease.status !== 'active' ||
+      lease.expires_at > input.now
+    ) {
+      throw new DomainError(
+        'codex_session_lease_conflict',
+        `codex_session_lease_conflict: Codex session lease ${input.lease_id} cannot be released by session operations`,
+      );
+    }
+    const fencedLease: CodexSessionLease = {
+      ...clone(lease),
+      status: 'fenced',
+      fenced_at: input.now,
+      updated_at: input.now,
+    };
+    const {
+      active_lease_id: _activeLeaseId,
+      runner_worker_id: _runnerWorkerId,
+      runner_launch_lease_id: _runnerLaunchLeaseId,
+      runner_runtime_job_id: _runnerRuntimeJobId,
+      runner_expires_at: _runnerExpiresAt,
+      ...sessionWithoutActiveLease
+    } = clone(session);
+    const shouldClearRunner =
+      session.runner_worker_id === lease.worker_id ||
+      session.runner_launch_lease_id === lease.id ||
+      (session.runner_expires_at !== undefined && session.runner_expires_at <= input.now);
+    const recoveredSession: CodexSession = {
+      ...(shouldClearRunner
+        ? sessionWithoutActiveLease
+        : {
+            ...sessionWithoutActiveLease,
+            runner_worker_id: session.runner_worker_id,
+            runner_launch_lease_id: session.runner_launch_lease_id,
+            runner_runtime_job_id: session.runner_runtime_job_id,
+            runner_expires_at: session.runner_expires_at,
+          }),
+      status: 'recovering',
+      updated_at: input.now,
+    };
+    this.codexSessionLeases.set(fencedLease.id, clone(fencedLease));
+    this.codexSessions.set(recoveredSession.id, clone(recoveredSession));
+    return { session: clone(recoveredSession), lease: clone(fencedLease) };
+  }
+
+  async stalePlanItemWorkflowQueuedActionForSessionOperations(input: {
+    workflow_id: string;
+    action_id: string;
+    reason: string;
+    now: string;
+  }): Promise<PlanItemWorkflowQueuedAction> {
+    const action = this.planItemWorkflowQueuedActions.get(input.action_id);
+    if (
+      action === undefined ||
+      action.workflow_id !== input.workflow_id ||
+      (action.status !== 'queued' && action.status !== 'running')
+    ) {
+      throw new DomainError(
+        'workflow_action_not_runnable',
+        `workflow_action_not_runnable: Plan Item Workflow queued action ${input.action_id} cannot be marked stale by session operations`,
+      );
+    }
+    const updated: PlanItemWorkflowQueuedAction = {
+      ...clone(action),
+      status: 'stale',
+      blocked_reason_code: input.reason,
+      updated_at: input.now,
+    };
+    this.planItemWorkflowQueuedActions.set(updated.id, clone(updated));
+    return clone(updated);
+  }
+
+  async terminalizeCodexRuntimeJobForSessionOperations(input: {
+    runtime_job_id: string;
+    terminal_status: NonNullable<CodexRuntimeJob['terminal_status']>;
+    reason_code: string;
+    now: string;
+  }): Promise<CodexRuntimeJob> {
+    const record = this.codexRuntimeJobs.get(input.runtime_job_id);
+    if (record === undefined || record.job.status === 'terminal') {
+      throw new DomainError(
+        'codex_runtime_job_unavailable',
+        `codex_runtime_job_unavailable: Codex runtime job ${input.runtime_job_id} cannot be terminalized by session operations`,
+      );
+    }
+    const terminalRecord = {
+      ...record,
+      job: {
+        ...record.job,
+        status: 'terminal' as const,
+        terminal_status: input.terminal_status,
+        terminal_reason_code: input.reason_code,
+        terminal_at: input.now,
+        updated_at: input.now,
+      },
+    };
+    this.codexRuntimeJobs.set(input.runtime_job_id, clone(terminalRecord));
+    return clone(terminalRecord.job);
   }
 
   private recoverExpiredActiveCodexSessionLeaseForClaim(
@@ -6095,11 +6214,21 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
   }
 
   private sessionRecoveryPersistenceIdentity(record: SessionRecoveryRecord): { workflow_id: string; development_plan_item_id: string } {
-    const predicate = record.predicate_summary;
-    if ('workflow' in predicate && predicate.workflow.state === 'present') {
+    if (record.workflow_id !== undefined && record.development_plan_item_id !== undefined) {
+      const workflow = this.planItemWorkflows.get(record.workflow_id);
+      if (
+        workflow === undefined ||
+        workflow.status === 'archived' ||
+        workflow.development_plan_item_id !== record.development_plan_item_id
+      ) {
+        throw new DomainError(
+          'session_operations_no_active_workflow',
+          'session_operations_no_active_workflow: recovery record requires an active workflow identity',
+        );
+      }
       return {
-        workflow_id: predicate.workflow_id,
-        development_plan_item_id: predicate.workflow.value.development_plan_item_id,
+        workflow_id: workflow.id,
+        development_plan_item_id: workflow.development_plan_item_id,
       };
     }
     const session = this.codexSessions.get(record.codex_session_id);
@@ -6110,7 +6239,13 @@ export class InMemoryDeliveryRepository implements DeliveryRepository {
       );
     }
     const workflow = this.planItemWorkflows.get(session.owner_id);
-    if (workflow === undefined || workflow.active_codex_session_id !== session.id || workflow.status === 'archived') {
+    if (
+      workflow === undefined ||
+      workflow.active_codex_session_id !== session.id ||
+      workflow.status === 'archived' ||
+      (record.workflow_id !== undefined && workflow.id !== record.workflow_id) ||
+      (record.development_plan_item_id !== undefined && workflow.development_plan_item_id !== record.development_plan_item_id)
+    ) {
       throw new DomainError(
         'session_operations_no_active_workflow',
         'session_operations_no_active_workflow: recovery record requires an active workflow identity',

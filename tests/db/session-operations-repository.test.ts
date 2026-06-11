@@ -151,6 +151,8 @@ const recoveryRecordFixture = (overrides: Partial<SessionRecoveryRecord> = {}): 
   operation: 'recover',
   actor_id: ids.actor,
   codex_session_id: ids.session,
+  workflow_id: ids.workflow,
+  development_plan_item_id: ids.item,
   reason: 'Release stale lease.',
   before_state: 'blocked_stale_lease',
   after_state: 'recovered',
@@ -257,6 +259,7 @@ function runSessionOperationsRepositoryExamples(name: string, createRepository: 
 
     it('creates and replays recovery records by operation idempotency key', async () => {
       const repository = createRepository();
+      await seedWorkflowSessionLease(repository);
       const record = recoveryRecordFixture();
       const storedRecord = { ...record, predicate_summary: predicateSummaryFixture() };
 
@@ -289,6 +292,7 @@ function runSessionOperationsRepositoryExamples(name: string, createRepository: 
 
     it('replays recovery records across full predicate and DTO predicate summary shapes', async () => {
       const repository = createRepository();
+      await seedWorkflowSessionLease(repository);
       const fullPredicateRecord = recoveryRecordFixture();
       const dtoSummaryRecord = recoveryRecordFixture({ predicate_summary: predicateSummaryFixture() });
 
@@ -311,6 +315,35 @@ function runSessionOperationsRepositoryExamples(name: string, createRepository: 
         record: dtoSummaryRecord,
         replayed: true,
       });
+    });
+
+    it('indexes recovery records by server-derived identity instead of predicate workflow identity', async () => {
+      const repository = createRepository();
+      await seedWorkflowSessionLease(repository);
+      const record = recoveryRecordFixture({
+        predicate_summary: {
+          ...predicateFixture(),
+          workflow_id: '88888831-2222-4222-8222-222222222222',
+          workflow: {
+            ...predicateFixture().workflow,
+            value: {
+              ...predicateFixture().workflow.value,
+              id: '88888831-2222-4222-8222-222222222222',
+              development_plan_item_id: '88888831-3333-4333-8333-333333333333',
+            },
+          },
+        },
+      });
+      const storedRecord = { ...record, predicate_summary: predicateSummaryFixture() };
+
+      await expect(repository.createOrReplaySessionRecoveryRecord(record)).resolves.toEqual({
+        record: storedRecord,
+        replayed: false,
+      });
+      await expect(repository.listSessionRecoveryRecords({ workflow_id: ids.workflow })).resolves.toEqual([storedRecord]);
+      await expect(repository.listSessionRecoveryRecords({ development_plan_item_id: ids.item })).resolves.toEqual([storedRecord]);
+      await expect(repository.listSessionRecoveryRecords({ workflow_id: '88888831-2222-4222-8222-222222222222' })).resolves.toEqual([]);
+      await expect(repository.listSessionRecoveryRecords({ development_plan_item_id: '88888831-3333-4333-8333-333333333333' })).resolves.toEqual([]);
     });
 
     it('stores and replaces per-capsule retention pins by reference relation', async () => {

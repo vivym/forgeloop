@@ -28,6 +28,7 @@ import type {
   CodexSessionTurn,
   CodexRuntimeJob,
   CodexRuntimeJobArtifact,
+  CodexRuntimeJobTerminalStatus,
   CodexRuntimeProfile,
   CodexRuntimeProfileRevision,
   CodexRuntimeRecoveryReasonCode,
@@ -329,6 +330,26 @@ export type ListCapsuleRetentionPinsQuery = {
   referenced_object_id?: string;
 };
 export type CapsuleRetentionPinRecord = CapsuleRetentionPin;
+export interface ReleaseStaleCodexSessionLeaseForSessionOperationsInput {
+  session_id: string;
+  workflow_id: string;
+  lease_id: string;
+  now: string;
+}
+
+export interface StalePlanItemWorkflowQueuedActionForSessionOperationsInput {
+  workflow_id: string;
+  action_id: string;
+  reason: string;
+  now: string;
+}
+
+export interface TerminalizeCodexRuntimeJobForSessionOperationsInput {
+  runtime_job_id: string;
+  terminal_status: CodexRuntimeJobTerminalStatus;
+  reason_code: string;
+  now: string;
+}
 
 export interface ReplaceActiveCodexSessionForWorkflowInput {
   workflow_id: string;
@@ -1754,6 +1775,15 @@ export interface DeliveryRepository {
   recoverCodexSessionLeaseForClaim(
     input: RecoverCodexSessionLeaseForClaimInput,
   ): Promise<{ session: CodexSession; lease: CodexSessionLease }>;
+  releaseStaleCodexSessionLeaseForSessionOperations(
+    input: ReleaseStaleCodexSessionLeaseForSessionOperationsInput,
+  ): Promise<{ session: CodexSession; lease: CodexSessionLease }>;
+  stalePlanItemWorkflowQueuedActionForSessionOperations(
+    input: StalePlanItemWorkflowQueuedActionForSessionOperationsInput,
+  ): Promise<PlanItemWorkflowQueuedAction>;
+  terminalizeCodexRuntimeJobForSessionOperations(
+    input: TerminalizeCodexRuntimeJobForSessionOperationsInput,
+  ): Promise<CodexRuntimeJob>;
   renewCodexSessionLease(input: RenewCodexSessionLeaseInput): Promise<CodexSessionLease>;
   terminalizeCodexSessionTurn(
     input: TerminalizeCodexSessionTurnInput,
