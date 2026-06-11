@@ -9,10 +9,13 @@ import {
   initiativeListItemSchema,
   myWorkQueueItemSchema,
   pipelineResponseSchema,
+  planItemSessionDiagnosticsSchema,
   productLaneResponseSchema,
   releaseReadinessDetailSchema,
   requirementDetailSchema,
   requirementListItemSchema,
+  sessionOperationsAuditResponseSchema,
+  sessionOperationsHealthResponseSchema,
   techDebtDetailSchema,
   techDebtListItemSchema,
 } from '@forgeloop/contracts';
@@ -23,6 +26,10 @@ import type {
   ProductLaneQuery,
   ProductLaneResponse,
   ReleaseCockpitResponse,
+  SessionOperationsAuditResponse,
+  SessionOperationsHealthQuery,
+  SessionOperationsHealthResponse,
+  PlanItemSessionDiagnostics,
 } from './types';
 
 export interface ProjectQuery {
@@ -228,6 +235,18 @@ export function createForgeloopQueryApi(options: ForgeloopApiOptions = {}) {
       aiNativeQueueResponseSchema.parse(await request<unknown>(`/query/code-review-handoffs${queryString(query)}`)),
     listQaHandoffs: async (query: ProductRegistryQuery) =>
       aiNativeQueueResponseSchema.parse(await request<unknown>(`/query/qa-handoffs${queryString(query)}`)),
+    listSessionOperationsHealth: async (query: SessionOperationsHealthQuery) =>
+      sessionOperationsHealthResponseSchema.parse(
+        await request<unknown>(`/session-operations/health${queryString(query)}`),
+      ) as SessionOperationsHealthResponse,
+    getSessionOperationsAudit: async (sessionId: string) =>
+      sessionOperationsAuditResponseSchema.parse(
+        await request<unknown>(`/session-operations/${encodeURIComponent(sessionId)}/audit`),
+      ) as SessionOperationsAuditResponse,
+    getPlanItemSessionDiagnostics: async (planItemId: string) =>
+      planItemSessionDiagnosticsSchema.parse(
+        await request<unknown>(`/plan-items/${encodeURIComponent(planItemId)}/session-diagnostics`),
+      ) as PlanItemSessionDiagnostics,
   };
 
   const api = {

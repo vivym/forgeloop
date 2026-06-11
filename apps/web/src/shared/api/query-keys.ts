@@ -1,5 +1,5 @@
 import type { MyWorkQuery, ProjectManagementListQuery } from './query';
-import type { AttachmentOwnerObjectType, ListProductQuery, ProductLaneId, ProductLaneQuery } from './types';
+import type { AttachmentOwnerObjectType, ListProductQuery, ProductLaneId, ProductLaneQuery, SessionOperationsHealthQuery } from './types';
 
 export const normalizeProductLaneQuery = (query: ProductLaneQuery): ProductLaneQuery => ({
   project_id: query.project_id,
@@ -69,6 +69,26 @@ export const normalizeProjectManagementListQuery = (query: ProjectManagementList
   ...(query.limit === undefined ? {} : { limit: query.limit }),
 });
 
+export const normalizeSessionOperationsHealthQuery = (
+  query: SessionOperationsHealthQuery,
+): SessionOperationsHealthQuery => ({
+  ...(query.development_plan_id === undefined ? {} : { development_plan_id: query.development_plan_id }),
+  ...(query.development_plan_item_id === undefined ? {} : { development_plan_item_id: query.development_plan_item_id }),
+  ...(query.project_id === undefined ? {} : { project_id: query.project_id }),
+  ...(query.workflow_id === undefined ? {} : { workflow_id: query.workflow_id }),
+  ...(query.codex_session_id === undefined ? {} : { codex_session_id: query.codex_session_id }),
+  ...(query.worker_id === undefined ? {} : { worker_id: query.worker_id }),
+  ...(query.state === undefined ? {} : { state: query.state }),
+  ...(query.severity === undefined ? {} : { severity: query.severity }),
+  ...(query.recovered_state === undefined ? {} : { recovered_state: query.recovered_state }),
+  ...(query.candidate_only === undefined ? {} : { candidate_only: query.candidate_only }),
+  ...(query.include_recovered === undefined ? {} : { include_recovered: query.include_recovered }),
+  ...(query.include_unrecoverable === undefined ? {} : { include_unrecoverable: query.include_unrecoverable }),
+  ...(query.min_lease_age_seconds === undefined ? {} : { min_lease_age_seconds: query.min_lease_age_seconds }),
+  ...(query.max_lease_age_seconds === undefined ? {} : { max_lease_age_seconds: query.max_lease_age_seconds }),
+  ...(query.limit === undefined ? {} : { limit: query.limit }),
+});
+
 export const queryKeys = {
   dashboard: (query: ListProductQuery) => ['dashboard', normalizeProductRegistryQuery(query)],
   developmentPlans: (query: ListProductQuery) => ['development-plans', normalizeProductRegistryQuery(query)],
@@ -89,6 +109,12 @@ export const queryKeys = {
   execution: (executionId: string | undefined) => ['execution', executionId],
   codeReviewHandoffs: (query: ListProductQuery) => ['code-review-handoffs', normalizeProductRegistryQuery(query)],
   qaHandoffs: (query: ListProductQuery) => ['qa-handoffs', normalizeProductRegistryQuery(query)],
+  sessionOperationsHealth: (query: SessionOperationsHealthQuery) => [
+    'session-operations-health',
+    normalizeSessionOperationsHealthQuery(query),
+  ],
+  sessionOperationsAudit: (sessionId: string | undefined) => ['session-operations-audit', sessionId],
+  planItemSessionDiagnostics: (planItemId: string | undefined) => ['plan-item-session-diagnostics', planItemId],
   myWork: (query: MyWorkQuery) => ['my-work', normalizeMyWorkQuery(query)],
   requirements: (query: ProjectManagementListQuery) => ['requirements', normalizeProjectManagementListQuery(query)],
   requirement: (requirementId: string | undefined) => ['requirement', requirementId],

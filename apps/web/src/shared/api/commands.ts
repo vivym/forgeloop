@@ -60,6 +60,10 @@ import type {
   WorkflowArtifactType,
   WorkflowMessageCommandBody,
   PlanItemWorkflowPublicDto,
+  RecoverSessionRequest,
+  RecoverSessionResponse,
+  ScavengeSessionOperationsRequest,
+  ScavengeSessionOperationsResponse,
 } from './types';
 
 export type {
@@ -566,6 +570,16 @@ export function createForgeloopCommandApi(options: ForgeloopApiOptions = {}) {
         method: 'POST',
         body,
         ...actorRequest(body.actor_id),
+      }),
+    recoverSession: (sessionId: string, body: RecoverSessionRequest) =>
+      request<RecoverSessionResponse>(`/session-operations/${encodeURIComponent(sessionId)}/recover`, {
+        method: 'POST',
+        body,
+      }),
+    scavengeSessionOperations: (body: ScavengeSessionOperationsRequest) =>
+      request<ScavengeSessionOperationsResponse>('/session-operations/scavenge', {
+        method: 'POST',
+        body,
       }),
 
     continueExecution: (executionId: string, body: ActorCommandBody) =>
