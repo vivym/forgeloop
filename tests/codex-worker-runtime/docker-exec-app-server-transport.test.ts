@@ -90,6 +90,7 @@ process.stdin.on('data', chunk => {
       dockerBin: fakeDocker,
       containerId: 'container-1',
       socketContainerPath: '/run/forgeloop/codex.sock',
+      handshakeTimeoutMs: 30_000,
     });
     try {
       await transport.initialize();
